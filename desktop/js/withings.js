@@ -83,6 +83,27 @@ $('#bt_testConnection').on('click', function () {
   })
 })
 
+$('#bt_testEndpoints').on('click', function () {
+  $.ajax({
+    type: "POST",
+    url: "plugins/withings/core/ajax/withings.ajax.php",
+    data: {
+      action: "testEndpoints"
+    },
+    dataType: 'json',
+    error: function (request, status, error) {
+      handleAjaxError(request, status, error)
+    },
+    success: function (data) {
+      if (data.state != 'ok') {
+        $('#div_alert').showAlert({message: data.result, level: 'danger'})
+        return
+      }
+      $('#div_alert').showAlert({message: data.result, level: 'success'})
+    }
+  })
+})
+
 $('#bt_resetAuth').on('click', function () {
   var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value()
   if (eqLogicId == '') {
@@ -140,15 +161,18 @@ $('#bt_syncData').on('click', function () {
       $('#bt_syncData').html('<i class="fas fa-sync"></i> {{Synchroniser maintenant}}')
     },
     success: function (data) {
+      $('#bt_syncData').removeClass('disabled')
+      $('#bt_syncData').html('<i class="fas fa-sync"></i> {{Synchroniser maintenant}}')
+      
       if (data.state != 'ok') {
         $('#div_alert').showAlert({message: data.result, level: 'danger'})
       } else {
         $('#div_alert').showAlert({message: data.result, level: 'success'})
-        // Recharger les commandes pour afficher les nouvelles valeurs
-        printEqLogic(eqLogicId)
+        // Attendre un peu avant de recharger pour que les valeurs se mettent à jour
+        setTimeout(function() {
+          window.location.reload()
+        }, 1000)
       }
-      $('#bt_syncData').removeClass('disabled')
-      $('#bt_syncData').html('<i class="fas fa-sync"></i> {{Synchroniser maintenant}}')
     }
   })
 })

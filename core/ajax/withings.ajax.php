@@ -176,9 +176,44 @@ try {
         }
         
         try {
-            $eqLogic->ensureValidToken();
-            log::add('withings', 'debug', 'Test de connexion réussi pour ' . $eqLogic->getHumanName());
-            ajax::success('Connexion OK - Token valide');
+            $accessToken = $eqLogic->getConfiguration('access_token');
+            $tokenExpires = $eqLogic->getConfiguration('token_expires', 0);
+            
+            if (empty($accessToken)) {
+                throw new Exception('Aucun token d\'accès configuré');
+            }
+            
+            if ($tokenExpires <= time()) {
+                throw new Exception('Token expiré');
+            }
+            
+            // Test simple avec l'API Withings
+            $testUrl = 'https://wbsapi.withings.net/v2/user?action=getdevice&access_token=' . $accessToken;
+            
+            $ch = curl_init();
+            curl_setopt_array($ch, array(
+                CURLOPT_URL => $testUrl,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_TIMEOUT => 10,
+                CURLOPT_SSL_VERIFYPEER => false
+            ));
+            
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+            
+            if ($httpCode == 200) {
+                $data = json_decode($response, true);
+                if (isset($data['status']) && $data['status'] == 0) {
+                    log::add('withings', 'debug', 'Test de connexion réussi');
+                    ajax::success('Connexion OK - Token valide');
+                } else {
+                    throw new Exception('Réponse API invalide');
+                }
+            } else {
+                throw new Exception('Erreur HTTP: ' . $httpCode);
+            }
+            
         } catch (Exception $e) {
             log::add('withings', 'error', 'Erreur test connexion: ' . $e->getMessage());
             throw new Exception('Erreur de connexion: ' . $e->getMessage());
@@ -217,6 +252,20 @@ try {
             log::add('withings', 'error', 'Erreur test endpoints: ' . $e->getMessage());
             throw new Exception('Erreur de test des endpoints: ' . $e->getMessage());
         }
+    }
+
+    if (init('action') == 'refreshCommands') {
+        log::add('withings', 'debug', 'Action refreshCommands - ID équipement: ' . init('id'));
+        
+        $eqLogic = withings::byId(init('id'));
+        if (!is_object($eqLogic)) {
+            throw new Exception(__('Équipement non trouvé', __FILE__));
+        }
+        
+        // Recréer les commandes
+        $eqLogic->createCommands();
+        
+        ajax::success('Commandes actualisées');
     }
 
     if (init('action') == 'resetAuth') {
