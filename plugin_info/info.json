@@ -1,73 +1,32 @@
 {
-	"id": "template",
-	"name": "Template",
-	"pluginVersion": "0.1",
-	"specialAttributes": {
-		"object": {
-			"toto": {
-				"name": {
-					"fr_FR": "Plop je suis un attribut spécial"
-				},
-				"type": "input"
-			},
-			"toto2": {
-				"name": {
-					"fr_FR": "Plop je suis un attribut spécial number"
-				},
-				"type": "number"
-			}
-		},
-		"user": {
-			"toto": {
-				"name": {
-					"fr_FR": "Plop je suis un attribut spécial"
-				},
-				"type": "select",
-				"values": [
-					{
-						"value": "1",
-						"name": "valeur 1"
-					},
-					{
-						"value": "plop",
-						"name": "valeur plop"
-					}
-				]
-			}
-		}
-	},
+	"id": "withings",
+	"name": "Withings",
+	"pluginVersion": "1.0.0",
 	"description": {
-		"fr_FR": "Template servant de base à la création de plugins pour Jeedom"
+		"fr_FR": "Plugin pour récupérer les données de santé depuis les balances Withings (poids, IMC, masse musculaire, masse grasse, etc.)",
+		"en_US": "Plugin to retrieve health data from Withings scales (weight, BMI, muscle mass, fat mass, etc.)"
 	},
 	"licence": "AGPL",
-	"author": "Jeedom SAS",
+	"author": "Jeedom Community",
 	"require": "4.2",
-	"os" : {
-		"min" : 10,
-		"max" : 12.99
+	"os": {
+		"min": 10,
+		"max": 12.99
 	},
-	"category": "programming",
+	"category": "health",
 	"hasDependency": false,
 	"hasOwnDeamon": false,
-	"maxDependancyInstallTime": 0,
-	"changelog_beta": "https:\/\/doc.jeedom.com\/#language#\/plugins\/programming\/template\/beta\/changelog",
-	"changelog": "https:\/\/doc.jeedom.com\/#language#\/plugins\/programming\/template\/changelog",
-	"documentation_beta": "https:\/\/doc.jeedom.com\/#language#\/plugins\/programming\/template\/beta",
-	"documentation": "https:\/\/doc.jeedom.com\/#language#\/plugins\/programming\/template",
+	"changelog_beta": "https://doc.jeedom.com/#language#/plugins/health/withings/beta/changelog",
+	"changelog": "https://doc.jeedom.com/#language#/plugins/health/withings/changelog",
+	"documentation_beta": "https://doc.jeedom.com/#language#/plugins/health/withings/beta",
+	"documentation": "https://doc.jeedom.com/#language#/plugins/health/withings",
 	"link": {
-		"forum": "Lien vers le forum",
-		"video": "Lien vers une video"
+		"forum": "Lien vers le forum Jeedom",
+		"video": "Lien vers une vidéo de présentation"
 	},
 	"language": [
 		"fr_FR",
-		"en_US",
-		"es_ES",
-		"de_DE",
-		"ru_RU",
-		"id_ID",
-		"it_IT",
-		"ja_JP",
-		"pt_PT"
+		"en_US"
 	],
 	"compatibility": [
 		"smart",

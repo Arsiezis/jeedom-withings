@@ -3,7 +3,7 @@ if (!isConnect('admin')) {
 	throw new Exception('{{401 - Accès non autorisé}}');
 }
 // Déclaration des variables obligatoires
-$plugin = plugin::byId('template');
+$plugin = plugin::byId('withings');
 sendVarToJS('eqType', $plugin->getId());
 $eqLogics = eqLogic::byType($plugin->getId());
 ?>
@@ -25,10 +25,10 @@ $eqLogics = eqLogic::byType($plugin->getId());
 				<span>{{Configuration}}</span>
 			</div>
 		</div>
-		<legend><i class="fas fa-table"></i> {{Mes templates}}</legend>
+		<legend><i class="fas fa-weight"></i> {{Mes balances Withings}}</legend>
 		<?php
 		if (count($eqLogics) == 0) {
-			echo '<br><div class="text-center" style="font-size:1.2em;font-weight:bold;">{{Aucun équipement Template trouvé, cliquer sur "Ajouter" pour commencer}}</div>';
+			echo '<br><div class="text-center" style="font-size:1.2em;font-weight:bold;">{{Aucune balance Withings trouvée, cliquez sur "Ajouter" pour commencer}}</div>';
 		} else {
 			// Champ de recherche
 			echo '<div class="input-group" style="margin:5px;">';
@@ -61,7 +61,6 @@ $eqLogics = eqLogic::byType($plugin->getId());
 		<!-- barre de gestion de l'équipement -->
 		<div class="input-group pull-right" style="display:inline-flex;">
 			<span class="input-group-btn">
-				<!-- Les balises <a></a> sont volontairement fermées à la ligne suivante pour éviter les espaces entre les boutons. Ne pas modifier -->
 				<a class="btn btn-sm btn-default eqLogicAction roundedLeft" data-action="configure"><i class="fas fa-cogs"></i><span class="hidden-xs"> {{Configuration avancée}}</span>
 				</a><a class="btn btn-sm btn-default eqLogicAction" data-action="copy"><i class="fas fa-copy"></i><span class="hidden-xs"> {{Dupliquer}}</span>
 				</a><a class="btn btn-sm btn-success eqLogicAction" data-action="save"><i class="fas fa-check-circle"></i> {{Sauvegarder}}
@@ -79,16 +78,15 @@ $eqLogics = eqLogic::byType($plugin->getId());
 			<!-- Onglet de configuration de l'équipement -->
 			<div role="tabpanel" class="tab-pane active" id="eqlogictab">
 				<!-- Partie gauche de l'onglet "Equipements" -->
-				<!-- Paramètres généraux et spécifiques de l'équipement -->
 				<form class="form-horizontal">
 					<fieldset>
 						<div class="col-lg-6">
 							<legend><i class="fas fa-wrench"></i> {{Paramètres généraux}}</legend>
 							<div class="form-group">
-								<label class="col-sm-4 control-label">{{Nom de l'équipement}}</label>
+								<label class="col-sm-4 control-label">{{Nom de la balance}}</label>
 								<div class="col-sm-6">
 									<input type="text" class="eqLogicAttr form-control" data-l1key="id" style="display:none;">
-									<input type="text" class="eqLogicAttr form-control" data-l1key="name" placeholder="{{Nom de l'équipement}}">
+									<input type="text" class="eqLogicAttr form-control" data-l1key="name" placeholder="{{Nom de la balance}}">
 								</div>
 							</div>
 							<div class="form-group">
@@ -126,50 +124,57 @@ $eqLogics = eqLogic::byType($plugin->getId());
 								</div>
 							</div>
 
-							<legend><i class="fas fa-cogs"></i> {{Paramètres spécifiques}}</legend>
+							<legend><i class="fas fa-user-shield"></i> {{Authentification Withings}}</legend>
 							<div class="form-group">
-								<label class="col-sm-4 control-label">{{Nom du paramètre n°1}}
-									<sup><i class="fas fa-question-circle tooltips" title="{{Renseignez le paramètre n°1 de l'équipement}}"></i></sup>
+								<label class="col-sm-4 control-label">{{Statut de connexion}}</label>
+								<div class="col-sm-8">
+									<span id="connectionStatus" class="label label-default">{{Non configuré}}</span>
+									<br><br>
+									<a class="btn btn-primary btn-sm" id="bt_authorize">
+										<i class="fas fa-key"></i> {{Autoriser l'accès Withings}}
+									</a>
+									<a class="btn btn-warning btn-sm" id="bt_testConnection">
+										<i class="fas fa-check-circle"></i> {{Tester la connexion}}
+									</a>
+									<a class="btn btn-danger btn-sm" id="bt_resetAuth">
+										<i class="fas fa-trash"></i> {{Réinitialiser}}
+									</a>
+								</div>
+							</div>
+
+							<legend><i class="fas fa-sync"></i> {{Synchronisation}}</legend>
+							<div class="form-group">
+								<label class="col-sm-4 control-label">{{Synchronisation automatique}}
+									<sup><i class="fas fa-question-circle tooltips" title="{{Synchronisation automatique toutes les heures}}"></i></sup>
 								</label>
 								<div class="col-sm-6">
-									<input type="text" class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="param1" placeholder="{{Paramètre n°1}}">
+									<input type="checkbox" class="eqLogicAttr" data-l1key="configuration" data-l2key="auto_sync" checked>
 								</div>
 							</div>
 							<div class="form-group">
-								<label class="col-sm-4 control-label"> {{Mot de passe}}
-									<sup><i class="fas fa-question-circle tooltips" title="{{Renseignez le mot de passe}}"></i></sup>
-								</label>
+								<label class="col-sm-4 control-label">{{Synchronisation manuelle}}</label>
 								<div class="col-sm-6">
-									<input type="text" class="eqLogicAttr form-control inputPassword" data-l1key="configuration" data-l2key="password">
-								</div>
-							</div>
-							<!-- Exemple de champ de saisie du cron d'auto-actualisation avec assistant -->
-							<!-- La fonction cron de la classe du plugin doit contenir le code prévu pour que ce champ soit fonctionnel -->
-							<div class="form-group">
-								<label class="col-sm-4 control-label">{{Auto-actualisation}}
-									<sup><i class="fas fa-question-circle tooltips" title="{{Fréquence de rafraîchissement des commandes infos de l'équipement}}"></i></sup>
-								</label>
-								<div class="col-sm-6">
-									<div class="input-group">
-										<input type="text" class="eqLogicAttr form-control roundedLeft" data-l1key="configuration" data-l2key="autorefresh" placeholder="{{Cliquer sur ? pour afficher l'assistant cron}}">
-										<span class="input-group-btn">
-											<a class="btn btn-default cursor jeeHelper roundedRight" data-helper="cron" title="Assistant cron">
-												<i class="fas fa-question-circle"></i>
-											</a>
-										</span>
-									</div>
+									<a class="btn btn-success btn-sm" id="bt_syncData">
+										<i class="fas fa-sync"></i> {{Synchroniser maintenant}}
+									</a>
 								</div>
 							</div>
 						</div>
 
 						<!-- Partie droite de l'onglet "Équipement" -->
-						<!-- Affiche un champ de commentaire par défaut mais vous pouvez y mettre ce que vous voulez -->
 						<div class="col-lg-6">
 							<legend><i class="fas fa-info"></i> {{Informations}}</legend>
 							<div class="form-group">
 								<label class="col-sm-4 control-label">{{Description}}</label>
 								<div class="col-sm-6">
-									<textarea class="form-control eqLogicAttr autogrow" data-l1key="comment"></textarea>
+									<textarea class="form-control eqLogicAttr autogrow" data-l1key="comment" placeholder="{{Description de votre balance Withings}}"></textarea>
+								</div>
+							</div>
+							
+							<legend><i class="fas fa-chart-line"></i> {{Dernières mesures}}</legend>
+							<div id="lastMeasures">
+								<div class="alert alert-info">
+									<i class="fas fa-info-circle"></i> {{Les dernières mesures s'afficheront ici après la première synchronisation}}
 								</div>
 							</div>
 						</div>
@@ -203,7 +208,7 @@ $eqLogics = eqLogic::byType($plugin->getId());
 	</div><!-- /.eqLogic -->
 </div><!-- /.row row-overflow -->
 
-<!-- Inclusion du fichier javascript du plugin (dossier, nom_du_fichier, extension_du_fichier, id_du_plugin) -->
-<?php include_file('desktop', 'template', 'js', 'template'); ?>
-<!-- Inclusion du fichier javascript du core - NE PAS MODIFIER NI SUPPRIMER -->
+<!-- Inclusion du fichier javascript du plugin -->
+<?php include_file('desktop', 'withings', 'js', 'withings'); ?>
+<!-- Inclusion du fichier javascript du core -->
 <?php include_file('core', 'plugin.template', 'js'); ?>

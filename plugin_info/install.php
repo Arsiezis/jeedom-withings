@@ -18,13 +18,45 @@
 require_once dirname(__FILE__) . '/../../../core/php/core.inc.php';
 
 // Fonction exécutée automatiquement après l'installation du plugin
-function template_install() {
+function withings_install() {
+    // Configuration par défaut du plugin
+    config::save('auto_sync', 1, 'withings');
+    config::save('auto_historize', 1, 'withings');
+    
+    // Activer le cron par défaut
+    config::save('functionality::cron::enable', 1, 'withings');
+    
+    log::add('withings', 'info', 'Installation du plugin Withings terminée');
 }
 
 // Fonction exécutée automatiquement après la mise à jour du plugin
-function template_update() {
+function withings_update() {
+    // Vérifier la version minimale de Jeedom
+    if (version_compare(jeedom::version(), '4.2', '<')) {
+        throw new Exception('Ce plugin nécessite Jeedom 4.2 ou supérieur');
+    }
+    
+    // Mettre à jour les commandes des équipements existants
+    foreach (eqLogic::byType('withings') as $eqLogic) {
+        $eqLogic->createCommands();
+    }
+    
+    // Activer le cron si nécessaire
+    if (config::byKey('functionality::cron::enable', 'withings') == '') {
+        config::save('functionality::cron::enable', 1, 'withings');
+    }
+    
+    log::add('withings', 'info', 'Mise à jour du plugin Withings terminée');
 }
 
 // Fonction exécutée automatiquement après la suppression du plugin
-function template_remove() {
+function withings_remove() {
+    // Nettoyer la configuration
+    config::remove('client_id', 'withings');
+    config::remove('client_secret', 'withings');
+    config::remove('auto_sync', 'withings');
+    config::remove('auto_historize', 'withings');
+    config::remove('functionality::cron::enable', 'withings');
+    
+    log::add('withings', 'info', 'Plugin Withings désinstallé');
 }

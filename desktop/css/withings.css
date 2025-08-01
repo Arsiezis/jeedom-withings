@@ -1,0 +1,87 @@
+/* Styles CSS pour le plugin Withings */
+
+.pluginListContainer .withings {
+    background-color: #4CAF50 !important;
+    color: white !important;
+}
+
+.pluginListContainer .withings .name {
+    color: white !important;
+}
+
+/* Icône principale du plugin */
+.plugin-withings-icon {
+    background-image: url('../img/withings_icon.png');
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+}
+
+/* Styles pour les équipements */
+.eqLogicDisplayCard.withings {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.eqLogicDisplayCard.withings .name {
+    color: white;
+    font-weight: bold;
+}
+
+/* Styles pour les commandes de mesures */
+.cmd-weight { color: #2196F3; }
+.cmd-bmi { color: #FF9800; }
+.cmd-fat-ratio { color: #F44336; }
+.cmd-muscle-mass { color: #4CAF50; }
+.cmd-bone-mass { color: #9E9E9E; }
+.cmd-hydration { color: #00BCD4; }
+
+/* Widget pour les mesures de santé */
+.withings-measure-widget {
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    padding: 15px;
+    margin: 10px;
+    text-align: center;
+}
+
+.withings-measure-widget .measure-value {
+    font-size: 2em;
+    font-weight: bold;
+    color: #333;
+}
+
+.withings-measure-widget .measure-unit {
+    font-size: 0.8em;
+    color: #666;
+    margin-left: 5px;
+}
+
+.withings-measure-widget .measure-label {
+    font-size: 0.9em;
+    color: #888;
+    margin-top: 5px;
+}
+
+/* Indicateurs de statut */
+.withings-status-connected {
+    color: #4CAF50;
+}
+
+.withings-status-disconnected {
+    color: #F44336;
+}
+
+.withings-status-sync {
+    color: #FF9800;
+}
+
+/* Animation de synchronisation */
+.withings-syncing {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
