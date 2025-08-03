@@ -24,367 +24,610 @@ $("#table_cmd").sortable({
   forcePlaceholderSize: true
 })
 
-/* Gestion des boutons spécifiques à Withings */
-$('#bt_authorize').on('click', function () {
-  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value()
-  if (eqLogicId == '') {
-    $('#div_alert').showAlert({message: '{{Veuillez d\'abord sauvegarder l\'équipement}}', level: 'warning'})
-    return
+/* Variables globales pour la sécurité */
+var withingsSecurity = {
+  csrfToken: null,
+  requestInProgress: false,
+  
+  // Génération ou récupération du token CSRF
+  getCSRFToken: function() {
+    if (!this.csrfToken) {
+      // Essayer de récupérer depuis le DOM ou générer un nouveau
+      this.csrfToken = $('#csrf_token').val() || this.generateCSRFToken();
+    }
+    return this.csrfToken;
+  },
+  
+  // Génération simple côté client (sera validé côté serveur)
+  generateCSRFToken: function() {
+    return 'csrf_' + Math.random().toString(36).substr(2, 15) + '_' + Date.now();
+  },
+  
+  // Validation de base des entrées
+  validateInput: function(input, type) {
+    switch(type) {
+      case 'equipment_id':
+        return /^\d+$/.test(input) && parseInt(input) > 0;
+      case 'client_id':
+        return /^[a-zA-Z0-9_-]+$/.test(input) && input.length > 5;
+      default:
+        return input && input.length > 0;
+    }
+  },
+  
+  // Gestion des erreurs avec logging côté client
+  handleError: function(action, error, context) {
+    console.error('[Withings Security] Action:', action, 'Error:', error, 'Context:', context);
+    
+    // Affichage utilisateur sécurisé
+    var userMessage = 'Une erreur est survenue';
+    if (error.responseJSON && error.responseJSON.message) {
+      userMessage = error.responseJSON.message;
+    } else if (error.responseText) {
+      userMessage = error.responseText;
+    }
+    
+    $('#div_alert').showAlert({
+      message: userMessage,
+      level: 'danger'
+    });
   }
+};
+
+/* Gestion des boutons spécifiques à Withings avec sécurité renforcée */
+$('#bt_authorize').on('click', function () {
+  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
+  
+  if (!withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+    $('#div_alert').showAlert({message: '{{Veuillez d\'abord sauvegarder l\'équipement}}', level: 'warning'});
+    return;
+  }
+  
+  if (withingsSecurity.requestInProgress) {
+    $('#div_alert').showAlert({message: '{{Une requête est déjà en cours, veuillez patienter}}', level: 'warning'});
+    return;
+  }
+  
+  withingsSecurity.requestInProgress = true;
+  $(this).prop('disabled', true);
   
   $.ajax({
     type: "POST",
     url: "plugins/withings/core/ajax/withings.ajax.php",
     data: {
       action: "getAuthUrl",
-      id: eqLogicId
+      id: eqLogicId,
+      csrf_token: withingsSecurity.getCSRFToken()
     },
     dataType: 'json',
+    timeout: 30000,
     error: function (request, status, error) {
-      handleAjaxError(request, status, error)
+      withingsSecurity.handleError('getAuthUrl', request, {eqLogicId: eqLogicId});
+      withingsSecurity.requestInProgress = false;
+      $('#bt_authorize').prop('disabled', false);
     },
     success: function (data) {
+      withingsSecurity.requestInProgress = false;
+      $('#bt_authorize').prop('disabled', false);
+      
       if (data.state != 'ok') {
-        $('#div_alert').showAlert({message: data.result, level: 'danger'})
-        return
+        $('#div_alert').showAlert({message: data.result, level: 'danger'});
+        return;
       }
-      // Ouvrir une popup pour l'autorisation
-      window.open(data.result, 'withings_auth', 'width=800,height=600,scrollbars=yes')
+      
+      // Validation de l'URL côté client
+      if (!data.result || !data.result.startsWith('https://')) {
+        $('#div_alert').showAlert({message: '{{URL d\'autorisation invalide}}', level: 'danger'});
+        return;
+      }
+      
+      // Ouvrir une popup pour l'autorisation avec paramètres sécurisés
+      var popup = window.open(
+        data.result, 
+        'withings_auth', 
+        'width=800,height=600,scrollbars=yes,resizable=yes,status=no,toolbar=no,menubar=no,location=no'
+      );
+      
+      // Vérifier si la popup a été bloquée
+      if (!popup) {
+        $('#div_alert').showAlert({
+          message: '{{La popup d\'autorisation a été bloquée. Veuillez autoriser les popups pour ce site.}}',
+          level: 'warning'
+        });
+      } else {
+        // Surveiller la fermeture de la popup pour actualiser les infos
+        var checkClosed = setInterval(function() {
+          if (popup.closed) {
+            clearInterval(checkClosed);
+            // Attendre un peu puis actualiser les informations
+            setTimeout(function() {
+              // Forcer une reconnexion en actualisant la page
+              window.location.reload();
+            }, 1000);
+          }
+        }, 1000);
+      }
     }
-  })
-})
+  });
+});
 
 $('#bt_testConnection').on('click', function () {
-  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value()
-  if (eqLogicId == '') {
-    $('#div_alert').showAlert({message: '{{Veuillez d\'abord sauvegarder l\'équipement}}', level: 'warning'})
-    return
+  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
+  
+  if (!withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+    $('#div_alert').showAlert({message: '{{Veuillez d\'abord sauvegarder l\'équipement}}', level: 'warning'});
+    return;
   }
   
-  $('#bt_testConnection').addClass('disabled')
-  $('#bt_testConnection').html('<i class="fas fa-spinner fa-spin"></i> {{Test en cours...}}')
+  if (withingsSecurity.requestInProgress) {
+    return;
+  }
+  
+  withingsSecurity.requestInProgress = true;
+  $(this).addClass('disabled').html('<i class="fas fa-spinner fa-spin"></i> {{Test en cours...}}');
   
   $.ajax({
     type: "POST",
     url: "plugins/withings/core/ajax/withings.ajax.php",
     data: {
       action: "testConnection",
-      id: eqLogicId
+      id: eqLogicId,
+      csrf_token: withingsSecurity.getCSRFToken()
     },
     dataType: 'json',
+    timeout: 30000,
     error: function (request, status, error) {
-      handleAjaxError(request, status, error)
-      $('#bt_testConnection').removeClass('disabled')
-      $('#bt_testConnection').html('<i class="fas fa-check-circle"></i> {{Tester la connexion}}')
+      withingsSecurity.handleError('testConnection', request, {eqLogicId: eqLogicId});
+      withingsSecurity.requestInProgress = false;
+      resetTestConnectionButton();
     },
     success: function (data) {
-      $('#bt_testConnection').removeClass('disabled')
-      $('#bt_testConnection').html('<i class="fas fa-check-circle"></i> {{Tester la connexion}}')
+      withingsSecurity.requestInProgress = false;
+      resetTestConnectionButton();
       
       if (data.state != 'ok') {
-        $('#div_alert').showAlert({message: data.result, level: 'danger'})
-        return
+        $('#div_alert').showAlert({message: data.result, level: 'danger'});
+        updateConnectionStatus('disconnected');
+        return;
       }
-      $('#div_alert').showAlert({message: data.result, level: 'success'})
-      updateConnectionStatus('connected')
-      // Actualiser les informations du token après le test
-      updateTokenInfo()
+      
+      $('#div_alert').showAlert({message: data.result, level: 'success'});
+      updateConnectionStatus('connected');
+      updateTokenInfo();
     }
-  })
-})
+  });
+  
+  function resetTestConnectionButton() {
+    $('#bt_testConnection').removeClass('disabled').html('<i class="fas fa-check-circle"></i> {{Tester la connexion}}');
+  }
+});
 
 $('#bt_refreshToken').on('click', function () {
-  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value()
-  if (eqLogicId == '') {
-    $('#div_alert').showAlert({message: '{{Veuillez d\'abord sauvegarder l\'équipement}}', level: 'warning'})
-    return
+  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
+  
+  if (!withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+    $('#div_alert').showAlert({message: '{{Veuillez d\'abord sauvegarder l\'équipement}}', level: 'warning'});
+    return;
   }
   
-  $('#bt_refreshToken').addClass('disabled')
-  $('#bt_refreshToken').html('<i class="fas fa-spinner fa-spin"></i> {{Renouvellement...}}')
+  if (withingsSecurity.requestInProgress) {
+    return;
+  }
+  
+  withingsSecurity.requestInProgress = true;
+  $(this).addClass('disabled').html('<i class="fas fa-spinner fa-spin"></i> {{Renouvellement...}}');
   
   $.ajax({
     type: "POST",
     url: "plugins/withings/core/ajax/withings.ajax.php",
     data: {
       action: "refreshToken",
-      id: eqLogicId
+      id: eqLogicId,
+      csrf_token: withingsSecurity.getCSRFToken()
     },
     dataType: 'json',
+    timeout: 45000,
     error: function (request, status, error) {
-      handleAjaxError(request, status, error)
-      $('#bt_refreshToken').removeClass('disabled')
-      $('#bt_refreshToken').html('<i class="fas fa-sync-alt"></i> {{Renouveler le token}}')
+      withingsSecurity.handleError('refreshToken', request, {eqLogicId: eqLogicId});
+      withingsSecurity.requestInProgress = false;
+      resetRefreshTokenButton();
     },
     success: function (data) {
-      $('#bt_refreshToken').removeClass('disabled')
-      $('#bt_refreshToken').html('<i class="fas fa-sync-alt"></i> {{Renouveler le token}}')
+      withingsSecurity.requestInProgress = false;
+      resetRefreshTokenButton();
       
       if (data.state != 'ok') {
-        $('#div_alert').showAlert({message: data.result, level: 'danger'})
+        $('#div_alert').showAlert({message: data.result, level: 'danger'});
       } else {
-        $('#div_alert').showAlert({message: data.result, level: 'success'})
-        // Actualiser les informations du token
-        updateTokenInfo()
+        $('#div_alert').showAlert({message: data.result, level: 'success'});
+        updateTokenInfo();
       }
     }
-  })
-})
+  });
+  
+  function resetRefreshTokenButton() {
+    $('#bt_refreshToken').removeClass('disabled').html('<i class="fas fa-sync-alt"></i> {{Renouveler le token}}');
+  }
+});
 
 $('#bt_testEndpoints').on('click', function () {
+  if (withingsSecurity.requestInProgress) {
+    return;
+  }
+  
+  withingsSecurity.requestInProgress = true;
+  $(this).prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> {{Test en cours...}}');
+  
   $.ajax({
     type: "POST",
     url: "plugins/withings/core/ajax/withings.ajax.php",
     data: {
-      action: "testEndpoints"
+      action: "testEndpoints",
+      csrf_token: withingsSecurity.getCSRFToken()
     },
     dataType: 'json',
+    timeout: 20000,
     error: function (request, status, error) {
-      handleAjaxError(request, status, error)
+      withingsSecurity.handleError('testEndpoints', request, {});
+      withingsSecurity.requestInProgress = false;
+      resetTestEndpointsButton();
     },
     success: function (data) {
+      withingsSecurity.requestInProgress = false;
+      resetTestEndpointsButton();
+      
       if (data.state != 'ok') {
-        $('#div_alert').showAlert({message: data.result, level: 'danger'})
-        return
+        $('#div_alert').showAlert({message: data.result, level: 'danger'});
+        return;
       }
-      $('#div_alert').showAlert({message: data.result, level: 'success'})
+      $('#div_alert').showAlert({message: data.result, level: 'success'});
     }
-  })
-})
+  });
+  
+  function resetTestEndpointsButton() {
+    $('#bt_testEndpoints').prop('disabled', false).html('<i class="fas fa-network-wired"></i> {{Tester les endpoints}}');
+  }
+});
 
 $('#bt_resetAuth').on('click', function () {
-  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value()
-  if (eqLogicId == '') {
-    $('#div_alert').showAlert({message: '{{Veuillez d\'abord sauvegarder l\'équipement}}', level: 'warning'})
-    return
+  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
+  
+  if (!withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+    $('#div_alert').showAlert({message: '{{Veuillez d\'abord sauvegarder l\'équipement}}', level: 'warning'});
+    return;
   }
   
-  bootbox.confirm('{{Êtes-vous sûr de vouloir réinitialiser l\'autorisation ? Vous devrez refaire l\'authentification.}}', function (result) {
-    if (result) {
-      $.ajax({
-        type: "POST",
-        url: "plugins/withings/core/ajax/withings.ajax.php",
-        data: {
-          action: "resetAuth",
-          id: eqLogicId
-        },
-        dataType: 'json',
-        error: function (request, status, error) {
-          handleAjaxError(request, status, error)
-        },
-        success: function (data) {
-          if (data.state != 'ok') {
-            $('#div_alert').showAlert({message: data.result, level: 'danger'})
-            return
-          }
-          $('#div_alert').showAlert({message: data.result, level: 'success'})
-          updateConnectionStatus('disconnected')
-          // Vider les informations du token
-          $('#tokenInfo').html('<div class="alert alert-warning"><i class="fas fa-exclamation-triangle"></i> Autorisation réinitialisée. Veuillez refaire l\'autorisation OAuth.</div>')
+  bootbox.confirm({
+    title: '{{Confirmation de réinitialisation}}',
+    message: '{{Êtes-vous sûr de vouloir réinitialiser l\'autorisation ? Vous devrez refaire l\'authentification complète.}}',
+    buttons: {
+      confirm: {
+        label: '<i class="fas fa-trash"></i> {{Réinitialiser}}',
+        className: 'btn-danger'
+      },
+      cancel: {
+        label: '<i class="fas fa-times"></i> {{Annuler}}',
+        className: 'btn-default'
+      }
+    },
+    callback: function (result) {
+      if (result) {
+        if (withingsSecurity.requestInProgress) {
+          return;
         }
-      })
+        
+        withingsSecurity.requestInProgress = true;
+        
+        $.ajax({
+          type: "POST",
+          url: "plugins/withings/core/ajax/withings.ajax.php",
+          data: {
+            action: "resetAuth",
+            id: eqLogicId,
+            csrf_token: withingsSecurity.getCSRFToken()
+          },
+          dataType: 'json',
+          timeout: 15000,
+          error: function (request, status, error) {
+            withingsSecurity.handleError('resetAuth', request, {eqLogicId: eqLogicId});
+            withingsSecurity.requestInProgress = false;
+          },
+          success: function (data) {
+            withingsSecurity.requestInProgress = false;
+            
+            if (data.state != 'ok') {
+              $('#div_alert').showAlert({message: data.result, level: 'danger'});
+              return;
+            }
+            
+            $('#div_alert').showAlert({message: data.result, level: 'success'});
+            updateConnectionStatus('disconnected');
+            $('#tokenInfo').html('<div class="alert alert-warning"><i class="fas fa-exclamation-triangle"></i> {{Autorisation réinitialisée. Veuillez refaire l\'autorisation OAuth.}}</div>');
+          }
+        });
+      }
     }
-  })
-})
+  });
+});
 
 $('#bt_syncData').on('click', function () {
-  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value()
-  if (eqLogicId == '') {
-    $('#div_alert').showAlert({message: '{{Veuillez d\'abord sauvegarder l\'équipement}}', level: 'warning'})
-    return
+  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
+  
+  if (!withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+    $('#div_alert').showAlert({message: '{{Veuillez d\'abord sauvegarder l\'équipement}}', level: 'warning'});
+    return;
   }
   
-  $('#bt_syncData').addClass('disabled')
-  $('#bt_syncData').html('<i class="fas fa-spinner fa-spin"></i> {{Synchronisation...}}')
+  if (withingsSecurity.requestInProgress) {
+    return;
+  }
+  
+  withingsSecurity.requestInProgress = true;
+  $(this).addClass('disabled').html('<i class="fas fa-spinner fa-spin"></i> {{Synchronisation...}}');
   
   $.ajax({
     type: "POST",
     url: "plugins/withings/core/ajax/withings.ajax.php",
     data: {
       action: "syncData",
-      id: eqLogicId
+      id: eqLogicId,
+      csrf_token: withingsSecurity.getCSRFToken()
     },
     dataType: 'json',
+    timeout: 60000,
     error: function (request, status, error) {
-      handleAjaxError(request, status, error)
-      $('#bt_syncData').removeClass('disabled')
-      $('#bt_syncData').html('<i class="fas fa-sync"></i> {{Synchroniser maintenant}}')
+      withingsSecurity.handleError('syncData', request, {eqLogicId: eqLogicId});
+      withingsSecurity.requestInProgress = false;
+      resetSyncButton();
     },
     success: function (data) {
-      $('#bt_syncData').removeClass('disabled')
-      $('#bt_syncData').html('<i class="fas fa-sync"></i> {{Synchroniser maintenant}}')
+      withingsSecurity.requestInProgress = false;
+      resetSyncButton();
       
       if (data.state != 'ok') {
-        $('#div_alert').showAlert({message: data.result, level: 'danger'})
+        $('#div_alert').showAlert({message: data.result, level: 'danger'});
       } else {
-        $('#div_alert').showAlert({message: data.result, level: 'success'})
-        // Attendre un peu avant de recharger pour que les valeurs se mettent à jour
+        $('#div_alert').showAlert({message: data.result, level: 'success'});
         setTimeout(function() {
-          window.location.reload()
-        }, 1000)
+          window.location.reload();
+        }, 1500);
       }
     }
-  })
-})
+  });
+  
+  function resetSyncButton() {
+    $('#bt_syncData').removeClass('disabled').html('<i class="fas fa-sync"></i> {{Synchroniser maintenant}}');
+  }
+});
 
-/* Fonction pour afficher les informations du token */
+/* Fonction pour afficher les informations du token avec sécurité */
 function updateTokenInfo() {
-  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value()
-  if (eqLogicId == '') return
+  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
+  if (!withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+    return;
+  }
   
   $.ajax({
     type: "POST",
     url: "plugins/withings/core/ajax/withings.ajax.php",
     data: {
       action: "getTokenInfo",
-      id: eqLogicId
+      id: eqLogicId,
+      csrf_token: withingsSecurity.getCSRFToken()
     },
     dataType: 'json',
+    timeout: 10000,
     success: function (data) {
       if (data.state == 'ok') {
-        var info = data.result
-        var statusClass = 'success'
-        var statusIcon = '✅'
+        var info = data.result;
+        var statusClass = 'success';
+        var statusIcon = '✅';
         
         if (info.is_expired) {
-          statusClass = 'danger'
-          statusIcon = '❌'
+          statusClass = 'danger';
+          statusIcon = '❌';
         } else if (info.needs_renewal_soon) {
-          statusClass = 'warning'
-          statusIcon = '⚠️'
+          statusClass = 'warning';
+          statusIcon = '⚠️';
         }
         
-        var html = '<div class="alert alert-' + statusClass + '">'
-        html += '<h4><i class="fas fa-key"></i> Informations du token d\'accès</h4>'
-        html += '<p><strong>État:</strong> ' + statusIcon + ' ' + info.status.toUpperCase() + '</p>'
-        html += '<p><strong>Expire dans:</strong> ' + info.expires_in_hours + ' heures</p>'
-        html += '<p><strong>Date d\'expiration:</strong> ' + info.expires_at + '</p>'
+        var html = '<div class="alert alert-' + statusClass + '">';
+        html += '<h4><i class="fas fa-key"></i> {{Informations du token d\'accès}}</h4>';
+        html += '<p><strong>{{État}}:</strong> ' + statusIcon + ' ' + escapeHtml(info.status.toUpperCase()) + '</p>';
+        html += '<p><strong>{{Expire dans}}:</strong> ' + escapeHtml(info.expires_in_hours) + ' {{heures}}</p>';
+        html += '<p><strong>{{Date d\'expiration}}:</strong> ' + escapeHtml(info.expires_at) + '</p>';
         
         if (info.renewed_at !== 'Jamais') {
-          html += '<p><strong>Dernier renouvellement:</strong> ' + info.renewed_at + '</p>'
+          html += '<p><strong>{{Dernier renouvellement}}:</strong> ' + escapeHtml(info.renewed_at) + '</p>';
         }
         
         if (info.created_at !== 'Inconnu') {
-          html += '<p><strong>Créé le:</strong> ' + info.created_at + '</p>'
+          html += '<p><strong>{{Créé le}}:</strong> ' + escapeHtml(info.created_at) + '</p>';
         }
         
         if (info.needs_renewal_soon && !info.is_expired) {
-          html += '<hr><p class="text-warning"><i class="fas fa-clock"></i> <strong>Le token expire bientôt.</strong><br>'
-          html += 'Il sera automatiquement renouvelé lors de la prochaine synchronisation ou test de connexion.</p>'
+          html += '<hr><p class="text-warning"><i class="fas fa-clock"></i> <strong>{{Le token expire bientôt.}}</strong><br>';
+          html += '{{Il sera automatiquement renouvelé lors de la prochaine synchronisation ou test de connexion.}}</p>';
         }
         
         if (info.is_expired) {
-          html += '<hr><p class="text-danger"><i class="fas fa-exclamation-triangle"></i> <strong>Token expiré!</strong><br>'
-          html += 'Cliquez sur "Renouveler le token" ou refaites l\'autorisation OAuth si le renouvellement échoue.</p>'
+          html += '<hr><p class="text-danger"><i class="fas fa-exclamation-triangle"></i> <strong>{{Token expiré!}}</strong><br>';
+          html += '{{Cliquez sur "Renouveler le token" ou refaites l\'autorisation OAuth si le renouvellement échoue.}}</p>';
         }
         
-        // Ajouter informations techniques
-        html += '<hr><small class="text-muted">'
-        html += '<i class="fas fa-info-circle"></i> Les tokens Withings expirent toutes les 3 heures et sont automatiquement renouvelés.'
-        html += '</small>'
+        html += '<hr><small class="text-muted">';
+        html += '<i class="fas fa-info-circle"></i> {{Les tokens Withings expirent toutes les 3 heures et sont automatiquement renouvelés.}}';
+        html += '</small>';
         
-        html += '</div>'
+        html += '</div>';
         
-        $('#tokenInfo').html(html)
+        $('#tokenInfo').html(html);
       }
     },
-    error: function() {
-      $('#tokenInfo').html('<div class="alert alert-info"><i class="fas fa-info-circle"></i> Informations du token non disponibles. Effectuez d\'abord l\'autorisation OAuth.</div>')
+    error: function(request, status, error) {
+      $('#tokenInfo').html('<div class="alert alert-info"><i class="fas fa-info-circle"></i> {{Informations du token non disponibles. Effectuez d\'abord l\'autorisation OAuth.}}</div>');
     }
-  })
+  });
 }
 
 /* Fonction pour mettre à jour le statut de connexion */
 function updateConnectionStatus(status) {
-  var statusElement = $('#connectionStatus')
+  var statusElement = $('#connectionStatus');
   
   switch (status) {
     case 'connected':
       statusElement.removeClass('label-default label-danger label-warning')
-      statusElement.addClass('label-success')
-      statusElement.text('{{Connecté}}')
-      break
+                  .addClass('label-success')
+                  .text('{{Connecté}}');
+      break;
     case 'disconnected':
       statusElement.removeClass('label-default label-success label-warning')
-      statusElement.addClass('label-danger')
-      statusElement.text('{{Déconnecté}}')
-      break
+                  .addClass('label-danger')
+                  .text('{{Déconnecté}}');
+      break;
     case 'warning':
       statusElement.removeClass('label-default label-success label-danger')
-      statusElement.addClass('label-warning')
-      statusElement.text('{{Token expire bientôt}}')
-      break
+                  .addClass('label-warning')
+                  .text('{{Token expire bientôt}}');
+      break;
     default:
       statusElement.removeClass('label-success label-danger label-warning')
-      statusElement.addClass('label-default')
-      statusElement.text('{{Non configuré}}')
+                  .addClass('label-default')
+                  .text('{{Non configuré}}');
   }
+}
+
+/* Fonction de sécurité pour échapper le HTML */
+function escapeHtml(text) {
+  if (typeof text !== 'string') {
+    return text;
+  }
+  
+  var map = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  };
+  
+  return text.replace(/[&<>"']/g, function(m) { return map[m]; });
 }
 
 /* Fonction exécutée au chargement de l'équipement */
 $('.eqLogicThumbnailDisplay').on('click', '.eqLogicDisplayCard', function () {
-  var eqLogicId = $(this).attr('data-eqLogic_id')
+  var eqLogicId = $(this).attr('data-eqLogic_id');
   
-  // Vérifier le statut de connexion
-  setTimeout(function() {
-    checkConnectionStatus(eqLogicId)
-  }, 500)
-})
+  if (withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+    setTimeout(function() {
+      checkConnectionStatus(eqLogicId);
+    }, 500);
+  }
+});
 
 function checkConnectionStatus(eqLogicId) {
+  if (!withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+    return;
+  }
+  
   $.ajax({
     type: "POST",
     url: "plugins/withings/core/ajax/withings.ajax.php",
     data: {
       action: "testConnection",
-      id: eqLogicId
+      id: eqLogicId,
+      csrf_token: withingsSecurity.getCSRFToken()
     },
     dataType: 'json',
+    timeout: 15000,
     error: function (request, status, error) {
-      updateConnectionStatus('disconnected')
+      updateConnectionStatus('disconnected');
     },
     success: function (data) {
       if (data.state == 'ok') {
-        updateConnectionStatus('connected')
+        updateConnectionStatus('connected');
       } else {
-        updateConnectionStatus('disconnected')
+        updateConnectionStatus('disconnected');
       }
     }
-  })
+  });
 }
 
-/* Charger les informations du token au chargement de la page */
+/* Charger les informations du token au chargement de la page avec sécurité */
 $(document).ready(function() {
+  // Protection contre les attaques XSS
+  $('input, textarea').on('paste', function(e) {
+    setTimeout(function() {
+      var value = $(e.target).val();
+      var cleanValue = value.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '');
+      cleanValue = cleanValue.replace(/javascript:/gi, '');
+      cleanValue = cleanValue.replace(/on\w+="[^"]*"/gi, '');
+      
+      if (value !== cleanValue) {
+        $(e.target).val(cleanValue);
+        $('#div_alert').showAlert({
+          message: '{{Contenu potentiellement dangereux supprimé}}',
+          level: 'warning'
+        });
+      }
+    }, 10);
+  });
+  
   // Attendre que l'ID soit disponible
   setTimeout(function() {
-    var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value()
-    if (eqLogicId && eqLogicId !== '') {
-      updateTokenInfo()
+    var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
+    if (withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+      updateTokenInfo();
       
-      // Actualiser les infos toutes les 5 minutes
-      setInterval(function() {
-        updateTokenInfo()
-      }, 300000)
+      var updateInterval = setInterval(function() {
+        if (!withingsSecurity.requestInProgress) {
+          updateTokenInfo();
+        }
+      }, 300000);
+      
+      $(window).on('beforeunload', function() {
+        clearInterval(updateInterval);
+      });
     }
-  }, 1000)
-})
-
-/* Fonction pour afficher les dernières mesures */
-function displayLastMeasures() {
-  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value()
-  if (eqLogicId == '') return
+  }, 1000);
   
-  var commands = ['weight', 'bmi', 'fat_ratio', 'muscle_mass', 'bone_mass', 'hydration', 'last_sync']
-  var html = '<div class="row">'
+  $(document).ajaxStart(function() {
+    window.ajaxTimeout = setTimeout(function() {
+      $('#div_alert').showAlert({
+        message: '{{La requête prend plus de temps que prévu...}}',
+        level: 'info'
+      });
+    }, 10000);
+  });
+  
+  $(document).ajaxStop(function() {
+    if (window.ajaxTimeout) {
+      clearTimeout(window.ajaxTimeout);
+    }
+  });
+});
+
+/* Fonction pour afficher les dernières mesures avec sécurité */
+function displayLastMeasures() {
+  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
+  if (!withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+    return;
+  }
+  
+  var commands = ['weight', 'bmi', 'fat_ratio', 'muscle_mass', 'bone_mass', 'hydration', 'last_sync'];
+  var html = '<div class="row">';
   
   commands.forEach(function(cmdLogicalId, index) {
     if (index > 0 && index % 2 === 0) {
-      html += '</div><div class="row">'
+      html += '</div><div class="row">';
     }
     
-    var cmd = $('.cmd[data-cmd_id]').find('.cmdAttr[data-l1key="logicalId"][value="' + cmdLogicalId + '"]').closest('.cmd')
-    var value = cmd.find('.cmdAttr[data-l1key="currentValue"]').text() || '--'
-    var unit = cmd.find('.cmdAttr[data-l1key="unite"]').val() || ''
+    var cmd = $('.cmd[data-cmd_id]').find('.cmdAttr[data-l1key="logicalId"][value="' + escapeHtml(cmdLogicalId) + '"]').closest('.cmd');
+    var value = cmd.find('.cmdAttr[data-l1key="currentValue"]').text() || '--';
+    var unit = cmd.find('.cmdAttr[data-l1key="unite"]').val() || '';
+    
+    value = escapeHtml(value);
+    unit = escapeHtml(unit);
     
     var displayName = {
       'weight': '{{Poids}}',
@@ -394,86 +637,252 @@ function displayLastMeasures() {
       'bone_mass': '{{Masse osseuse}}',
       'hydration': '{{Hydratation}}',
       'last_sync': '{{Dernière sync}}'
-    }
+    };
     
-    html += '<div class="col-sm-6">'
-    html += '<div class="panel panel-default">'
-    html += '<div class="panel-body text-center">'
-    html += '<h4>' + displayName[cmdLogicalId] + '</h4>'
-    html += '<h3 class="text-primary">' + value + ' ' + unit + '</h3>'
-    html += '</div></div></div>'
-  })
+    html += '<div class="col-sm-6">';
+    html += '<div class="panel panel-default">';
+    html += '<div class="panel-body text-center">';
+    html += '<h4>' + displayName[cmdLogicalId] + '</h4>';
+    html += '<h3 class="text-primary">' + value + ' ' + unit + '</h3>';
+    html += '</div></div></div>';
+  });
   
-  html += '</div>'
-  $('#lastMeasures').html(html)
+  html += '</div>';
+  $('#lastMeasures').html(html);
 }
 
 /* Fonction permettant l'affichage des commandes dans l'équipement */
 function addCmdToTable(_cmd) {
   if (!isset(_cmd)) {
-    var _cmd = { configuration: {} }
+    var _cmd = { configuration: {} };
   }
   if (!isset(_cmd.configuration)) {
-    _cmd.configuration = {}
+    _cmd.configuration = {};
   }
-  var tr = '<tr class="cmd" data-cmd_id="' + init(_cmd.id) + '">'
-  tr += '<td class="hidden-xs">'
-  tr += '<span class="cmdAttr" data-l1key="id"></span>'
-  tr += '</td>'
-  tr += '<td>'
-  tr += '<div class="input-group">'
-  tr += '<input class="cmdAttr form-control input-sm roundedLeft" data-l1key="name" placeholder="{{Nom de la commande}}">'
-  tr += '<span class="input-group-btn"><a class="cmdAction btn btn-sm btn-default" data-l1key="chooseIcon" title="{{Choisir une icône}}"><i class="fas fa-icons"></i></a></span>'
-  tr += '<span class="cmdAttr input-group-addon roundedRight" data-l1key="display" data-l2key="icon" style="font-size:19px;padding:0 5px 0 0!important;"></span>'
-  tr += '</div>'
-  tr += '<select class="cmdAttr form-control input-sm" data-l1key="value" style="display:none;margin-top:5px;" title="{{Commande info liée}}">'
-  tr += '<option value="">{{Aucune}}</option>'
-  tr += '</select>'
-  tr += '</td>'
-  tr += '<td>'
-  tr += '<span class="type" type="' + init(_cmd.type) + '">' + jeedom.cmd.availableType() + '</span>'
-  tr += '<span class="subType" subType="' + init(_cmd.subType) + '"></span>'
-  tr += '</td>'
-  tr += '<td>'
-  tr += '<label class="checkbox-inline"><input type="checkbox" class="cmdAttr" data-l1key="isVisible" checked/>{{Afficher}}</label> '
-  tr += '<label class="checkbox-inline"><input type="checkbox" class="cmdAttr" data-l1key="isHistorized" checked/>{{Historiser}}</label> '
-  tr += '<label class="checkbox-inline"><input type="checkbox" class="cmdAttr" data-l1key="display" data-l2key="invertBinary"/>{{Inverser}}</label> '
-  tr += '<div style="margin-top:7px;">'
-  tr += '<input class="tooltips cmdAttr form-control input-sm" data-l1key="configuration" data-l2key="minValue" placeholder="{{Min}}" title="{{Min}}" style="width:30%;max-width:80px;display:inline-block;margin-right:2px;">'
-  tr += '<input class="tooltips cmdAttr form-control input-sm" data-l1key="configuration" data-l2key="maxValue" placeholder="{{Max}}" title="{{Max}}" style="width:30%;max-width:80px;display:inline-block;margin-right:2px;">'
-  tr += '<input class="tooltips cmdAttr form-control input-sm" data-l1key="unite" placeholder="Unité" title="{{Unité}}" style="width:30%;max-width:80px;display:inline-block;margin-right:2px;">'
-  tr += '</div>'
-  tr += '</td>'
-  tr += '<td>'
-  tr += '<span class="cmdAttr" data-l1key="htmlstate"></span>'
-  tr += '</td>'
-  tr += '<td>'
+  
+  var tr = '<tr class="cmd" data-cmd_id="' + init(_cmd.id) + '">';
+  tr += '<td class="hidden-xs">';
+  tr += '<span class="cmdAttr" data-l1key="id"></span>';
+  tr += '</td>';
+  tr += '<td>';
+  tr += '<div class="input-group">';
+  tr += '<input class="cmdAttr form-control input-sm roundedLeft" data-l1key="name" placeholder="{{Nom de la commande}}">';
+  tr += '<span class="input-group-btn"><a class="cmdAction btn btn-sm btn-default" data-l1key="chooseIcon" title="{{Choisir une icône}}"><i class="fas fa-icons"></i></a></span>';
+  tr += '<span class="cmdAttr input-group-addon roundedRight" data-l1key="display" data-l2key="icon" style="font-size:19px;padding:0 5px 0 0!important;"></span>';
+  tr += '</div>';
+  tr += '<select class="cmdAttr form-control input-sm" data-l1key="value" style="display:none;margin-top:5px;" title="{{Commande info liée}}">';
+  tr += '<option value="">{{Aucune}}</option>';
+  tr += '</select>';
+  tr += '</td>';
+  tr += '<td>';
+  tr += '<span class="type" type="' + init(_cmd.type) + '">' + jeedom.cmd.availableType() + '</span>';
+  tr += '<span class="subType" subType="' + init(_cmd.subType) + '"></span>';
+  tr += '</td>';
+  tr += '<td>';
+  tr += '<label class="checkbox-inline"><input type="checkbox" class="cmdAttr" data-l1key="isVisible" checked/>{{Afficher}}</label> ';
+  tr += '<label class="checkbox-inline"><input type="checkbox" class="cmdAttr" data-l1key="isHistorized" checked/>{{Historiser}}</label> ';
+  tr += '<label class="checkbox-inline"><input type="checkbox" class="cmdAttr" data-l1key="display" data-l2key="invertBinary"/>{{Inverser}}</label> ';
+  tr += '<div style="margin-top:7px;">';
+  tr += '<input class="tooltips cmdAttr form-control input-sm" data-l1key="configuration" data-l2key="minValue" placeholder="{{Min}}" title="{{Min}}" style="width:30%;max-width:80px;display:inline-block;margin-right:2px;">';
+  tr += '<input class="tooltips cmdAttr form-control input-sm" data-l1key="configuration" data-l2key="maxValue" placeholder="{{Max}}" title="{{Max}}" style="width:30%;max-width:80px;display:inline-block;margin-right:2px;">';
+  tr += '<input class="tooltips cmdAttr form-control input-sm" data-l1key="unite" placeholder="Unité" title="{{Unité}}" style="width:30%;max-width:80px;display:inline-block;margin-right:2px;">';
+  tr += '</div>';
+  tr += '</td>';
+  tr += '<td>';
+  tr += '<span class="cmdAttr" data-l1key="htmlstate"></span>';
+  tr += '</td>';
+  tr += '<td>';
   if (is_numeric(_cmd.id)) {
-    tr += '<a class="btn btn-default btn-xs cmdAction" data-action="configure"><i class="fas fa-cogs"></i></a> '
-    tr += '<a class="btn btn-default btn-xs cmdAction" data-action="test"><i class="fas fa-rss"></i> {{Tester}}</a>'
+    tr += '<a class="btn btn-default btn-xs cmdAction" data-action="configure"><i class="fas fa-cogs"></i></a> ';
+    tr += '<a class="btn btn-default btn-xs cmdAction" data-action="test"><i class="fas fa-rss"></i> {{Tester}}</a>';
   }
-  tr += '<i class="fas fa-minus-circle pull-right cmdAction cursor" data-action="remove" title="{{Supprimer la commande}}"></i></td>'
-  tr += '</tr>'
-  $('#table_cmd tbody').append(tr)
-  var tr = $('#table_cmd tbody tr').last()
+  tr += '<i class="fas fa-minus-circle pull-right cmdAction cursor" data-action="remove" title="{{Supprimer la commande}}"></i></td>';
+  tr += '</tr>';
+  
+  $('#table_cmd tbody').append(tr);
+  var tr = $('#table_cmd tbody tr').last();
   jeedom.eqLogic.buildSelectCmd({
     id: $('.eqLogicAttr[data-l1key=id]').value(),
     filter: { type: 'info' },
     error: function (error) {
-      $('#div_alert').showAlert({ message: error.message, level: 'danger' })
+      $('#div_alert').showAlert({ message: error.message, level: 'danger' });
     },
     success: function (result) {
-      tr.find('.cmdAttr[data-l1key=value]').append(result)
-      tr.setValues(_cmd, '.cmdAttr')
-      jeedom.cmd.changeType(tr, init(_cmd.subType))
+      tr.find('.cmdAttr[data-l1key=value]').append(result);
+      tr.setValues(_cmd, '.cmdAttr');
+      jeedom.cmd.changeType(tr, init(_cmd.subType));
     }
-  })
+  });
 }
 
-/* Fonction pour gérer les erreurs AJAX */
-function handleAjaxError(request, status, error) {
-  $('#div_alert').showAlert({
-    message: request.status + ' : ' + request.responseText,
-    level: 'danger'
-  })
+/* Protection contre les attaques de clickjacking */
+if (top !== self) {
+  top.location = self.location;
 }
+
+/* Fonction utilitaire sécurisée pour initialiser les valeurs */
+function init(value) {
+  if (typeof value === 'undefined' || value === null) {
+    return '';
+  }
+  return value;
+}
+
+/* Fonction utilitaire pour vérifier l'existence d'une variable */
+function isset(variable) {
+  return typeof variable !== 'undefined' && variable !== null;
+}
+
+/* Fonction utilitaire pour vérifier si une valeur est numérique */
+function is_numeric(value) {
+  return !isNaN(parseFloat(value)) && isFinite(value);
+}
+
+/* Validation côté client des formulaires */
+$(document).on('submit', 'form', function(e) {
+  var hasError = false;
+  
+  // Vérifier tous les champs requis
+  $(this).find('input[required]').each(function() {
+    if (!$(this).val().trim()) {
+      $(this).addClass('has-error');
+      hasError = true;
+    } else {
+      $(this).removeClass('has-error');
+    }
+  });
+  
+  // Vérifier les patterns
+  $(this).find('input[pattern]').each(function() {
+    var pattern = new RegExp($(this).attr('pattern'));
+    if ($(this).val() && !pattern.test($(this).val())) {
+      $(this).addClass('has-error');
+      hasError = true;
+    } else {
+      $(this).removeClass('has-error');
+    }
+  });
+  
+  if (hasError) {
+    e.preventDefault();
+    $('#div_alert').showAlert({
+      message: '{{Veuillez corriger les erreurs dans le formulaire}}',
+      level: 'warning'
+    });
+  }
+});
+
+/* Fonction pour nettoyer les intervalles et timeouts lors du déchargement */
+$(window).on('beforeunload', function() {
+  // Nettoyer tous les intervalles actifs
+  for (var i = 1; i < 99999; i++) {
+    window.clearInterval(i);
+    window.clearTimeout(i);
+  }
+});
+
+/* Gestion des erreurs JavaScript globales */
+window.addEventListener('error', function(e) {
+  console.error('[Withings] JavaScript Error:', e.error);
+  
+  // Ne pas afficher les erreurs techniques à l'utilisateur, sauf en mode debug
+  if (typeof DEBUG !== 'undefined' && DEBUG) {
+    $('#div_alert').showAlert({
+      message: '{{Erreur JavaScript détectée. Consultez la console pour plus de détails.}}',
+      level: 'warning'
+    });
+  }
+});
+
+/* Fonction de sécurité pour valider les URLs */
+function isValidUrl(string) {
+  try {
+    var url = new URL(string);
+    return url.protocol === "https:";
+  } catch (_) {
+    return false;
+  }
+}
+
+/* Fonction de limitation des requêtes côté client */
+var requestLimiter = {
+  requests: {},
+  maxRequests: 10,
+  timeWindow: 60000, // 1 minute
+  
+  canMakeRequest: function(action) {
+    var now = Date.now();
+    var key = action;
+    
+    if (!this.requests[key]) {
+      this.requests[key] = [];
+    }
+    
+    // Nettoyer les anciennes requêtes
+    this.requests[key] = this.requests[key].filter(function(timestamp) {
+      return now - timestamp < this.timeWindow;
+    }.bind(this));
+    
+    // Vérifier la limite
+    if (this.requests[key].length >= this.maxRequests) {
+      $('#div_alert').showAlert({
+        message: '{{Trop de requêtes. Veuillez patienter avant de réessayer.}}',
+        level: 'warning'
+      });
+      return false;
+    }
+    
+    // Ajouter la requête actuelle
+    this.requests[key].push(now);
+    return true;
+  }
+};
+
+/* Intercepter toutes les requêtes AJAX pour ajouter la protection */
+$(document).ajaxSend(function(event, xhr, settings) {
+  // Ajouter le token CSRF automatiquement
+  if (settings.data && settings.data.indexOf('csrf_token') === -1) {
+    settings.data += '&csrf_token=' + encodeURIComponent(withingsSecurity.getCSRFToken());
+  }
+  
+  // Vérifier la limitation des requêtes
+  var action = '';
+  if (settings.data && settings.data.indexOf('action=') !== -1) {
+    var matches = settings.data.match(/action=([^&]+)/);
+    if (matches) {
+      action = matches[1];
+    }
+  }
+  
+  if (action && !requestLimiter.canMakeRequest(action)) {
+    xhr.abort();
+    return false;
+  }
+});
+
+/* Style CSS pour les éléments d'erreur */
+var style = document.createElement('style');
+style.textContent = `
+  .has-error {
+    border-color: #d32f2f !important;
+    background-color: #ffebee !important;
+  }
+  
+  .security-warning {
+    border-left: 4px solid #ff9800;
+    padding: 10px;
+    background-color: #fff3e0;
+    margin: 10px 0;
+  }
+  
+  .rate-limit-warning {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 9999;
+    max-width: 300px;
+  }
+`;
+document.head.appendChild(style);
+
+console.log('[Withings] Plugin JavaScript chargé avec sécurité renforcée');

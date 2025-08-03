@@ -16,6 +16,7 @@
 */
 
 require_once __DIR__ . '/../../../../core/php/core.inc.php';
+require_once __DIR__ . '/WithingsSecurity.class.php';
 
 class withings extends eqLogic {
     
@@ -151,22 +152,14 @@ class withings extends eqLogic {
     }
     
     /**
-     * URLs configurables avec validation de sécurité
+     * URLs configurables avec validation de sécurité renforcée
      */
     public static function getApiBaseUrl() {
         $configUrl = config::byKey('api_base_url', 'withings');
         $url = !empty($configUrl) ? $configUrl : self::DEFAULT_API_BASE_URL;
         
-        // Validation de sécurité
-        $parsedUrl = parse_url($url);
-        if (!$parsedUrl || !in_array($parsedUrl['host'], self::ALLOWED_API_DOMAINS)) {
-            log::add('withings', 'error', 'URL API non autorisée: ' . $url);
-            throw new Exception('URL API non autorisée');
-        }
-        
-        if ($parsedUrl['scheme'] !== 'https') {
-            throw new Exception('HTTPS requis pour l\'API');
-        }
+        // Validation de sécurité renforcée
+        WithingsSecurity::validateURL($url, 'api');
         
         if (substr($url, -1) !== '/') {
             $url .= '/';
@@ -179,16 +172,8 @@ class withings extends eqLogic {
         $configUrl = config::byKey('oauth_base_url', 'withings');
         $url = !empty($configUrl) ? $configUrl : self::DEFAULT_OAUTH_BASE_URL;
         
-        // Validation de sécurité
-        $parsedUrl = parse_url($url);
-        if (!$parsedUrl || !in_array($parsedUrl['host'], self::ALLOWED_OAUTH_DOMAINS)) {
-            log::add('withings', 'error', 'URL OAuth non autorisée: ' . $url);
-            throw new Exception('URL OAuth non autorisée');
-        }
-        
-        if ($parsedUrl['scheme'] !== 'https') {
-            throw new Exception('HTTPS requis pour OAuth');
-        }
+        // Validation de sécurité renforcée
+        WithingsSecurity::validateURL($url, 'oauth');
         
         if (substr($url, -1) !== '/') {
             $url .= '/';
@@ -198,10 +183,61 @@ class withings extends eqLogic {
     }
     
     /**
+     * Gestion sécurisée des secrets clients
+     */
+    public static function saveClientSecret($secret) {
+        if (!WithingsSecurity::validateInput($secret, 'client_id')) {
+            throw new Exception('Format du client secret invalide');
+        }
+        
+        try {
+            $encryptedSecret = WithingsSecurity::encryptSecret($secret);
+            config::save('client_secret', $encryptedSecret, 'withings');
+            
+            WithingsSecurity::logAction('client_secret_updated', [
+                'admin_user' => isset($_SESSION['user']) ? $_SESSION['user']->getLogin() : 'unknown'
+            ]);
+        } catch (Exception $e) {
+            log::add('withings', 'error', 'Erreur sauvegarde client secret: ' . $e->getMessage());
+            throw $e;
+        }
+    }
+    
+    public static function getClientSecret() {
+        $encryptedSecret = config::byKey('client_secret', 'withings');
+        if (empty($encryptedSecret)) {
+            throw new Exception('Client secret non configuré');
+        }
+        
+        try {
+            return WithingsSecurity::decryptSecret($encryptedSecret);
+        } catch (Exception $e) {
+            // Si le déchiffrement échoue, c'est peut-être un ancien secret en clair
+            // ou chiffré avec une ancienne clé
+            log::add('withings', 'warning', 'Tentative de lecture du client secret en clair pour migration');
+            
+            // Vérifier si c'est un secret en base64 (chiffré) ou en clair
+            if (base64_encode(base64_decode($encryptedSecret, true)) === $encryptedSecret) {
+                // C'est probablement chiffré avec une ancienne clé, impossible à déchiffrer
+                throw new Exception('Client secret chiffré avec une ancienne clé. Veuillez le reconfigurer dans les paramètres du plugin.');
+            } else {
+                // C'est probablement en clair, le retourner tel quel et le re-chiffrer
+                log::add('withings', 'info', 'Migration du client secret vers le nouveau chiffrement');
+                try {
+                    self::saveClientSecret($encryptedSecret);
+                } catch (Exception $saveException) {
+                    log::add('withings', 'warning', 'Impossible de re-chiffrer le client secret: ' . $saveException->getMessage());
+                }
+                return $encryptedSecret;
+            }
+        }
+    }
+    
+    /**
      * Cron automatique avec renouvellement des tokens
      */
     public static function cronHourly() {
-        log::add('withings', 'debug', 'Cron horaire - Vérification des équipements Withings');
+        WithingsSecurity::logAction('cron_hourly_start');
         
         foreach (eqLogic::byType('withings', true) as $withings) {
             try {
@@ -213,7 +249,11 @@ class withings extends eqLogic {
                     $withings->syncData();
                 }
             } catch (Exception $e) {
-                log::add('withings', 'error', 'Erreur cron pour ' . $withings->getHumanName() . ': ' . $e->getMessage());
+                WithingsSecurity::logAction('cron_error', [
+                    'equipment_id' => $withings->getId(),
+                    'equipment_name' => $withings->getHumanName(),
+                    'error' => $e->getMessage()
+                ], 'error');
             }
         }
     }
@@ -251,128 +291,42 @@ class withings extends eqLogic {
     }
     
     /**
-     * Génération ou récupération de la clé de chiffrement
-     */
-    private function getEncryptionKey() {
-        // D'abord essayer la clé globale Jeedom
-        $key = config::byKey('internal::cryptokey', 'core');
-        
-        // Si pas de clé globale, essayer de la générer
-        if (empty($key)) {
-            log::add('withings', 'debug', 'Génération d\'une nouvelle clé de chiffrement globale');
-            
-            try {
-                // Générer une nouvelle clé de chiffrement
-                if (function_exists('random_bytes')) {
-                    $newKey = bin2hex(random_bytes(32));
-                } else {
-                    $newKey = hash('sha256', uniqid(mt_rand(), true) . microtime());
-                }
-                
-                // Sauvegarder la clé dans la configuration Jeedom
-                config::save('internal::cryptokey', $newKey, 'core');
-                $key = $newKey;
-                
-                log::add('withings', 'info', 'Nouvelle clé de chiffrement globale générée');
-            } catch (Exception $e) {
-                log::add('withings', 'warning', 'Impossible de générer une clé globale: ' . $e->getMessage());
-                
-                // Fallback: utiliser une clé spécifique au plugin
-                $key = config::byKey('encryption_key', 'withings');
-                if (empty($key)) {
-                    if (function_exists('random_bytes')) {
-                        $key = bin2hex(random_bytes(32));
-                    } else {
-                        $key = hash('sha256', 'withings_' . uniqid(mt_rand(), true) . microtime());
-                    }
-                    
-                    config::save('encryption_key', $key, 'withings');
-                    log::add('withings', 'info', 'Clé de chiffrement spécifique au plugin générée');
-                }
-            }
-        }
-        
-        return $key;
-    }
-    
-    /**
-     * Chiffrement des données avec génération de clé si nécessaire
+     * Chiffrement des données avec la classe de sécurité
      */
     private function encryptData($data) {
-        try {
-            $key = $this->getEncryptionKey();
-            
-            if (empty($key)) {
-                log::add('withings', 'warning', 'Aucune clé de chiffrement disponible, stockage en clair');
-                return $data;
-            }
-            
-            // Chiffrement avec la clé disponible
-            if (function_exists('random_bytes')) {
-                $iv = random_bytes(16);
-            } else {
-                $iv = openssl_random_pseudo_bytes(16);
-            }
-            
-            $encrypted = openssl_encrypt($data, 'AES-256-CBC', hash('sha256', $key), 0, $iv);
-            
-            if ($encrypted === false) {
-                log::add('withings', 'warning', 'Erreur de chiffrement, stockage en clair');
-                return $data;
-            }
-            
-            log::add('withings', 'debug', 'Données chiffrées avec succès');
-            return base64_encode($iv . $encrypted);
-            
-        } catch (Exception $e) {
-            log::add('withings', 'error', 'Erreur chiffrement: ' . $e->getMessage());
-            return $data; // Fallback en cas d'erreur
-        }
+        return WithingsSecurity::encryptSecret($data);
     }
     
     /**
      * Déchiffrement des données
      */
     private function decryptData($encryptedData) {
+        if (empty($encryptedData)) {
+            return '';
+        }
+        
         try {
-            $key = $this->getEncryptionKey();
-            
-            if (empty($key)) {
-                // Si pas de clé, assumer que c'est du texte en clair (migration)
-                return $encryptedData;
-            }
-            
-            $data = base64_decode($encryptedData);
-            if ($data === false || strlen($data) < 16) {
-                // Probablement du texte en clair
-                return $encryptedData;
-            }
-            
-            $iv = substr($data, 0, 16);
-            $encrypted = substr($data, 16);
-            
-            $decrypted = openssl_decrypt($encrypted, 'AES-256-CBC', hash('sha256', $key), 0, $iv);
-            return $decrypted !== false ? $decrypted : $encryptedData;
-            
+            return WithingsSecurity::decryptSecret($encryptedData);
         } catch (Exception $e) {
-            log::add('withings', 'error', 'Erreur déchiffrement: ' . $e->getMessage());
-            return $encryptedData; // Fallback
+            // Tentative de lecture en texte clair pour migration
+            WithingsSecurity::logAction('token_migration_attempt', [
+                'equipment_id' => $this->getId()
+            ], 'warning');
+            return $encryptedData;
         }
     }
     
     /**
-     * Génération simple de l'état OAuth
+     * Génération sécurisée de l'état OAuth (simplifiée pour compatibilité)
      */
     public function generateSecureState() {
-        // Génération compatible toutes versions
-        if (function_exists('random_bytes')) {
-            $state = bin2hex(random_bytes(16)) . '_' . time();
-        } else {
-            $state = md5(uniqid(mt_rand(), true)) . '_' . time();
-        }
-        
+        $state = WithingsSecurity::generateSecureState($this->getId());
         $this->setConfiguration('oauth_state', $state);
         $this->save();
+        
+        WithingsSecurity::logAction('oauth_state_generated', [
+            'equipment_id' => $this->getId()
+        ]);
         
         return $state;
     }
@@ -381,7 +335,10 @@ class withings extends eqLogic {
      * Renouvellement automatique du token d'accès
      */
     public function refreshAccessToken() {
-        log::add('withings', 'info', 'Tentative de renouvellement du token pour ' . $this->getHumanName());
+        WithingsSecurity::logAction('token_refresh_start', [
+            'equipment_id' => $this->getId(),
+            'equipment_name' => $this->getHumanName()
+        ]);
         
         $encryptedRefreshToken = $this->getConfiguration('refresh_token');
         if (empty($encryptedRefreshToken)) {
@@ -390,7 +347,7 @@ class withings extends eqLogic {
         
         $refreshToken = $this->decryptData($encryptedRefreshToken);
         $clientId = config::byKey('client_id', 'withings');
-        $clientSecret = config::byKey('client_secret', 'withings');
+        $clientSecret = self::getClientSecret();
         
         if (empty($clientId) || empty($clientSecret)) {
             throw new Exception('Configuration OAuth incomplète');
@@ -403,8 +360,6 @@ class withings extends eqLogic {
             'client_secret' => $clientSecret,
             'refresh_token' => $refreshToken
         );
-        
-        log::add('withings', 'debug', 'Renouvellement token avec refresh_token...');
         
         try {
             $oauthUrl = 'https://wbsapi.withings.net/v2/oauth2';
@@ -433,30 +388,31 @@ class withings extends eqLogic {
             $curlError = curl_error($ch);
             curl_close($ch);
             
-            log::add('withings', 'debug', 'Réponse renouvellement HTTP: ' . $httpCode);
-            
             if ($curlError) {
-                log::add('withings', 'error', 'Erreur cURL renouvellement: ' . $curlError);
                 throw new Exception('Erreur de connexion lors du renouvellement: ' . $curlError);
             }
             
             if ($httpCode !== 200) {
-                log::add('withings', 'error', 'Erreur HTTP renouvellement: ' . $httpCode . ' - Réponse: ' . substr($response, 0, 500));
+                WithingsSecurity::logAction('token_refresh_http_error', [
+                    'equipment_id' => $this->getId(),
+                    'http_code' => $httpCode
+                ], 'error');
                 throw new Exception('Erreur HTTP lors du renouvellement: ' . $httpCode);
             }
             
             $decodedResponse = json_decode($response, true);
             if (json_last_error() !== JSON_ERROR_NONE) {
-                log::add('withings', 'error', 'Erreur JSON renouvellement: ' . json_last_error_msg());
                 throw new Exception('Erreur JSON lors du renouvellement: ' . json_last_error_msg());
             }
             
             if (isset($decodedResponse['status']) && $decodedResponse['status'] !== 0) {
                 $errorMsg = isset($decodedResponse['error']) ? $decodedResponse['error'] : 'Erreur inconnue';
-                log::add('withings', 'error', 'Erreur API renouvellement: ' . $errorMsg);
                 
                 // Si le refresh token est invalide, il faut refaire l'autorisation complète
                 if (strpos($errorMsg, 'invalid_grant') !== false || strpos($errorMsg, 'invalid refresh') !== false) {
+                    WithingsSecurity::logAction('token_refresh_invalid_grant', [
+                        'equipment_id' => $this->getId()
+                    ], 'warning');
                     throw new Exception('Refresh token invalide. Nouvelle autorisation OAuth nécessaire.');
                 }
                 
@@ -466,29 +422,33 @@ class withings extends eqLogic {
             $body = isset($decodedResponse['body']) ? $decodedResponse['body'] : $decodedResponse;
             if (isset($body['access_token'])) {
                 
-                log::add('withings', 'debug', 'Nouveaux tokens reçus, sauvegarde...');
-                
                 // Sauvegarder les nouveaux tokens chiffrés
                 $this->setConfiguration('access_token', $this->encryptData($body['access_token']));
                 
                 // IMPORTANT: Toujours remplacer le refresh token par le nouveau
                 if (isset($body['refresh_token'])) {
                     $this->setConfiguration('refresh_token', $this->encryptData($body['refresh_token']));
-                    log::add('withings', 'debug', 'Nouveau refresh_token sauvegardé');
                 }
                 
                 $this->setConfiguration('token_expires', time() + $body['expires_in']);
                 $this->setConfiguration('token_renewed', time());
                 $this->save();
                 
-                log::add('withings', 'info', 'Token renouvelé avec succès pour ' . $this->getHumanName() . ' (expire dans ' . round($body['expires_in']/3600, 1) . 'h)');
+                WithingsSecurity::logAction('token_refresh_success', [
+                    'equipment_id' => $this->getId(),
+                    'expires_in_hours' => round($body['expires_in']/3600, 1)
+                ]);
+                
                 return true;
             }
             
             throw new Exception('Nouveaux tokens manquants dans la réponse');
             
         } catch (Exception $e) {
-            log::add('withings', 'error', 'Erreur renouvellement token: ' . $e->getMessage());
+            WithingsSecurity::logAction('token_refresh_error', [
+                'equipment_id' => $this->getId(),
+                'error' => $e->getMessage()
+            ], 'error');
             throw $e;
         }
     }
@@ -507,14 +467,20 @@ class withings extends eqLogic {
         
         // Renouveler le token 30 minutes avant expiration (1800 secondes)
         if ($tokenExpires <= ($now + self::RENEWAL_THRESHOLD)) {
-            log::add('withings', 'warning', 'Token expire bientôt pour ' . $this->getHumanName() . ', renouvellement automatique...');
+            WithingsSecurity::logAction('token_auto_renewal_needed', [
+                'equipment_id' => $this->getId(),
+                'expires_in' => $tokenExpires - $now
+            ]);
             
             try {
                 $this->refreshAccessToken();
                 // Récupérer le nouveau token
                 $encryptedToken = $this->getConfiguration('access_token');
             } catch (Exception $e) {
-                log::add('withings', 'error', 'Échec renouvellement automatique: ' . $e->getMessage());
+                WithingsSecurity::logAction('token_auto_renewal_failed', [
+                    'equipment_id' => $this->getId(),
+                    'error' => $e->getMessage()
+                ], 'error');
                 throw new Exception('Token expiré et renouvellement échoué: ' . $e->getMessage());
             }
         }
@@ -532,11 +498,13 @@ class withings extends eqLogic {
         // Si le token expire dans moins de 2 heures, le renouveler
         if ($tokenExpires <= ($now + 7200)) {
             try {
-                log::add('withings', 'info', 'Renouvellement préventif du token pour ' . $this->getHumanName());
                 $this->refreshAccessToken();
                 return true;
             } catch (Exception $e) {
-                log::add('withings', 'warning', 'Échec renouvellement préventif pour ' . $this->getHumanName() . ': ' . $e->getMessage());
+                WithingsSecurity::logAction('token_preventive_renewal_failed', [
+                    'equipment_id' => $this->getId(),
+                    'error' => $e->getMessage()
+                ], 'warning');
                 return false;
             }
         }
@@ -568,14 +536,12 @@ class withings extends eqLogic {
     }
     
     /**
-     * Obtenir l'URL d'autorisation OAuth
+     * Obtenir l'URL d'autorisation OAuth avec sécurité renforcée
      */
     public function getAuthorizationUrl() {
-        log::add('withings', 'debug', 'Génération URL autorisation pour ' . $this->getHumanName());
-        
         $clientId = config::byKey('client_id', 'withings');
-        if (empty($clientId)) {
-            throw new Exception('Client ID Withings non configuré');
+        if (empty($clientId) || !WithingsSecurity::validateInput($clientId, 'client_id')) {
+            throw new Exception('Client ID Withings non configuré ou invalide');
         }
         
         $redirectUri = network::getNetworkAccess('external') . '/plugins/withings/core/ajax/withings.ajax.php?action=oauth_callback';
@@ -596,36 +562,43 @@ class withings extends eqLogic {
         );
         
         $authUrl = self::getOAuthBaseUrl() . 'authorize2?' . http_build_query($params);
-        log::add('withings', 'debug', 'URL autorisation générée pour ' . $this->getHumanName());
+        
+        WithingsSecurity::logAction('oauth_url_generated', [
+            'equipment_id' => $this->getId(),
+            'redirect_uri' => $redirectUri
+        ]);
         
         return $authUrl;
     }
     
     /**
-     * Échanger le code contre un token (version corrigée)
+     * Échanger le code contre un token avec sécurité renforcée
      */
     public function exchangeCodeForToken($code, $state) {
-        log::add('withings', 'debug', 'Échange code/token pour ' . $this->getHumanName());
+        WithingsSecurity::logAction('oauth_token_exchange_start', [
+            'equipment_id' => $this->getId(),
+            'equipment_name' => $this->getHumanName()
+        ]);
         
-        // Validation de l'état OAuth
+        // Validation simple de l'état OAuth (sans vérification stricte du hash)
         $expectedState = $this->getConfiguration('oauth_state');
-        if ($state !== $expectedState) {
-            log::add('withings', 'error', 'État OAuth invalide pour ' . $this->getHumanName());
-            throw new Exception('État OAuth invalide');
+        if (empty($expectedState) || $state !== $expectedState) {
+            WithingsSecurity::logAction('oauth_state_mismatch', [
+                'equipment_id' => $this->getId()
+            ], 'warning');
+            throw new Exception('État OAuth invalide ou expiré');
         }
         
         // Validation du code d'autorisation
-        if (empty($code) || !preg_match('/^[a-zA-Z0-9_-]+$/', $code)) {
-            log::add('withings', 'error', 'Code d\'autorisation invalide');
+        if (!WithingsSecurity::validateInput($code, 'oauth_code')) {
             throw new Exception('Code d\'autorisation invalide');
         }
         
         $clientId = config::byKey('client_id', 'withings');
-        $clientSecret = config::byKey('client_secret', 'withings');
+        $clientSecret = self::getClientSecret();
         $redirectUri = network::getNetworkAccess('external') . '/plugins/withings/core/ajax/withings.ajax.php?action=oauth_callback';
         
         if (empty($clientId) || empty($clientSecret)) {
-            log::add('withings', 'error', 'Configuration OAuth incomplète');
             throw new Exception('Configuration OAuth incomplète');
         }
         
@@ -637,8 +610,6 @@ class withings extends eqLogic {
             'code' => $code,
             'redirect_uri' => $redirectUri
         );
-        
-        log::add('withings', 'debug', 'Échange de token avec paramètres validés');
         
         try {
             $oauthUrl = 'https://wbsapi.withings.net/v2/oauth2';
@@ -668,36 +639,40 @@ class withings extends eqLogic {
             $curlError = curl_error($ch);
             curl_close($ch);
             
-            log::add('withings', 'debug', 'Réponse HTTP: ' . $httpCode);
-            
             if ($curlError) {
-                log::add('withings', 'error', 'Erreur cURL: ' . $curlError);
                 throw new Exception('Erreur de connexion: ' . $curlError);
             }
             
             if ($httpCode !== 200) {
-                log::add('withings', 'error', 'Erreur HTTP: ' . $httpCode . ' - Réponse: ' . substr($response, 0, 500));
+                WithingsSecurity::logAction('oauth_token_exchange_http_error', [
+                    'equipment_id' => $this->getId(),
+                    'http_code' => $httpCode
+                ], 'error');
                 throw new Exception('Erreur HTTP: ' . $httpCode);
             }
             
-            log::add('withings', 'debug', 'Réponse reçue, traitement JSON en cours...');
-            
             $decodedResponse = json_decode($response, true);
             if (json_last_error() !== JSON_ERROR_NONE) {
-                log::add('withings', 'error', 'Erreur JSON: ' . json_last_error_msg());
                 throw new Exception('Erreur JSON: ' . json_last_error_msg());
             }
             
             if (isset($decodedResponse['status']) && $decodedResponse['status'] !== 0) {
                 $errorMsg = isset($decodedResponse['error']) ? $decodedResponse['error'] : 'Erreur inconnue';
-                log::add('withings', 'error', 'Erreur API Withings: ' . $errorMsg);
+                WithingsSecurity::logAction('oauth_api_error', [
+                    'equipment_id' => $this->getId(),
+                    'api_error' => $errorMsg,
+                    'status' => $decodedResponse['status']
+                ], 'error');
                 throw new Exception('Erreur API Withings: ' . $errorMsg . ' (Status: ' . $decodedResponse['status'] . ')');
             }
             
             $body = isset($decodedResponse['body']) ? $decodedResponse['body'] : $decodedResponse;
             if (isset($body['access_token'])) {
                 
-                log::add('withings', 'debug', 'Token reçu, sauvegarde sécurisée en cours...');
+                // Validation des tokens reçus
+                if (!WithingsSecurity::validateInput($body['access_token'], 'access_token')) {
+                    throw new Exception('Token d\'accès reçu invalide');
+                }
                 
                 // Sauvegarder les nouveaux tokens chiffrés
                 $this->setConfiguration('access_token', $this->encryptData($body['access_token']));
@@ -711,24 +686,48 @@ class withings extends eqLogic {
                 
                 $this->save();
                 
-                log::add('withings', 'info', 'Token obtenu et chiffré avec succès pour ' . $this->getHumanName());
+                WithingsSecurity::logAction('oauth_token_exchange_success', [
+                    'equipment_id' => $this->getId(),
+                    'equipment_name' => $this->getHumanName(),
+                    'user_id' => isset($body['userid']) ? $body['userid'] : 'unknown'
+                ]);
+                
+                // Effectuer une première synchronisation automatique après l'autorisation
+                try {
+                    $this->syncData();
+                    WithingsSecurity::logAction('initial_sync_after_oauth_success', [
+                        'equipment_id' => $this->getId()
+                    ]);
+                } catch (Exception $syncException) {
+                    // Ne pas faire échouer l'autorisation si la sync échoue
+                    WithingsSecurity::logAction('initial_sync_after_oauth_failed', [
+                        'equipment_id' => $this->getId(),
+                        'error' => $syncException->getMessage()
+                    ], 'warning');
+                }
+                
                 return true;
             }
             
-            log::add('withings', 'error', 'Token manquant dans la réponse');
             throw new Exception('Token manquant dans la réponse');
             
         } catch (Exception $e) {
-            log::add('withings', 'error', 'Erreur échange token: ' . $e->getMessage());
+            WithingsSecurity::logAction('oauth_token_exchange_error', [
+                'equipment_id' => $this->getId(),
+                'error' => $e->getMessage()
+            ], 'error');
             throw $e;
         }
     }
     
     /**
-     * Synchronisation des données Withings
+     * Synchronisation des données Withings avec logging sécurisé
      */
     public function syncData() {
-        log::add('withings', 'info', 'Début synchronisation pour ' . $this->getHumanName());
+        WithingsSecurity::logAction('sync_data_start', [
+            'equipment_id' => $this->getId(),
+            'equipment_name' => $this->getHumanName()
+        ]);
         
         try {
             $accessToken = $this->getSecureAccessToken();
@@ -741,9 +740,14 @@ class withings extends eqLogic {
             
             if (!empty($measures)) {
                 $this->processMeasures($measures);
-                log::add('withings', 'info', 'Données synchronisées avec succès pour ' . $this->getHumanName());
+                WithingsSecurity::logAction('sync_data_success', [
+                    'equipment_id' => $this->getId(),
+                    'measures_count' => count($measures['measuregrps'] ?? [])
+                ]);
             } else {
-                log::add('withings', 'info', 'Aucune nouvelle donnée trouvée pour ' . $this->getHumanName());
+                WithingsSecurity::logAction('sync_data_no_new_data', [
+                    'equipment_id' => $this->getId()
+                ]);
             }
             
             // Mettre à jour la date de synchronisation
@@ -751,11 +755,13 @@ class withings extends eqLogic {
             if (is_object($lastSyncCmd)) {
                 $lastSyncCmd->setConfiguration('value', date('Y-m-d H:i:s'));
                 $lastSyncCmd->event(date('Y-m-d H:i:s'));
-                log::add('withings', 'debug', 'Dernière synchronisation mise à jour: ' . date('Y-m-d H:i:s'));
             }
             
         } catch (Exception $e) {
-            log::add('withings', 'error', 'Erreur synchronisation: ' . $e->getMessage());
+            WithingsSecurity::logAction('sync_data_error', [
+                'equipment_id' => $this->getId(),
+                'error' => $e->getMessage()
+            ], 'error');
             throw $e;
         }
     }
@@ -774,10 +780,8 @@ class withings extends eqLogic {
             'access_token' => $accessToken,
             'startdate' => $startDate,
             'enddate' => $endDate,
-            'meastype' => $measureTypes // Tous les types : 1,4,5,6,8,11,76,77,88,185
+            'meastype' => $measureTypes
         );
-        
-        log::add('withings', 'debug', 'Requête mesures pour ' . $this->getHumanName() . ' - Types: ' . $measureTypes);
         
         $url = self::getApiBaseUrl() . 'measure';
         
@@ -802,15 +806,15 @@ class withings extends eqLogic {
         $curlError = curl_error($ch);
         curl_close($ch);
         
-        log::add('withings', 'debug', 'Réponse mesures HTTP: ' . $httpCode);
-        
         if ($curlError) {
-            log::add('withings', 'error', 'Erreur cURL mesures: ' . $curlError);
             throw new Exception('Erreur de connexion mesures: ' . $curlError);
         }
         
         if ($httpCode !== 200) {
-            log::add('withings', 'error', 'Erreur HTTP récupération mesures: ' . $httpCode);
+            WithingsSecurity::logAction('api_measures_http_error', [
+                'equipment_id' => $this->getId(),
+                'http_code' => $httpCode
+            ], 'error');
             throw new Exception('Erreur HTTP récupération mesures: ' . $httpCode);
         }
         
@@ -828,21 +832,16 @@ class withings extends eqLogic {
     }
     
     /**
-     * Traiter les mesures reçues (corrigé pour récupérer l'IMC de l'API)
+     * Traiter les mesures reçues
      */
     public function processMeasures($data) {
         if (!isset($data['measuregrps']) || empty($data['measuregrps'])) {
-            log::add('withings', 'warning', 'Aucun groupe de mesures trouvé pour ' . $this->getHumanName());
             return;
         }
-        
-        log::add('withings', 'debug', 'Nombre de groupes de mesures: ' . count($data['measuregrps']));
         
         // Prendre le groupe de mesures le plus récent
         $latestMeasureGroup = $data['measuregrps'][0];
         $measures = array();
-        
-        log::add('withings', 'debug', 'Traitement du groupe pour ' . $this->getHumanName());
         
         foreach ($latestMeasureGroup['measures'] as $measure) {
             $type = $measure['type'];
@@ -851,8 +850,6 @@ class withings extends eqLogic {
             
             // Calculer la valeur réelle : value * 10^unit
             $realValue = $value * pow(10, $unit);
-            
-            log::add('withings', 'debug', 'Mesure type ' . $type . ': ' . $value . ' * 10^' . $unit . ' = ' . $realValue);
             
             // Mapper les types de mesures selon la constante MEASURE_TYPES
             if (isset(self::MEASURE_TYPES[$type])) {
@@ -886,17 +883,12 @@ class withings extends eqLogic {
                     case 88: // Masse osseuse
                         $measures['bone_mass'] = round($realValue, 2);
                         break;
-                    case 185: // IMC - Récupéré directement de l'API !
+                    case 185: // IMC
                         $measures['bmi'] = round($realValue, 2);
-                        log::add('withings', 'info', 'IMC récupéré directement de l\'API Withings: ' . $realValue);
                         break;
                 }
-            } else {
-                log::add('withings', 'debug', 'Type de mesure non géré: ' . $type . ' (valeur: ' . $realValue . ')');
             }
         }
-        
-        log::add('withings', 'debug', 'Mesures traitées: ' . count($measures) . ' valeurs - ' . implode(', ', array_keys($measures)));
         
         // Mettre à jour les commandes
         foreach ($measures as $type => $value) {
@@ -904,13 +896,14 @@ class withings extends eqLogic {
             if (is_object($cmd)) {
                 $cmd->setConfiguration('value', $value);
                 $cmd->event($value);
-                log::add('withings', 'debug', 'Commande ' . $type . ' mise à jour: ' . $value);
-            } else {
-                log::add('withings', 'warning', 'Commande ' . $type . ' non trouvée');
             }
         }
         
-        log::add('withings', 'info', 'Mesures traitées avec succès pour ' . $this->getHumanName());
+        WithingsSecurity::logAction('measures_processed', [
+            'equipment_id' => $this->getId(),
+            'measures_types' => array_keys($measures),
+            'measures_count' => count($measures)
+        ]);
     }
     
     /**
@@ -933,6 +926,10 @@ class withingsCmd extends cmd {
         
         switch ($this->getLogicalId()) {
             case 'sync':
+                WithingsSecurity::logAction('manual_sync_triggered', [
+                    'equipment_id' => $eqLogic->getId(),
+                    'user_id' => isset($_SESSION['user']) ? $_SESSION['user']->getId() : 'unknown'
+                ]);
                 $eqLogic->syncData();
                 break;
         }
