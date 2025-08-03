@@ -58,6 +58,7 @@ function generateSuccessPageSafe($eqLogic) {
             .success p { color: #666; margin-bottom: 15px; }
             .btn { background: #2e7d32; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; display: inline-block; margin: 10px; }
             .btn:hover { background: #1b5e20; }
+            .countdown { font-weight: bold; color: #1976d2; }
         </style>
     </head>
     <body>
@@ -67,26 +68,52 @@ function generateSuccessPageSafe($eqLogic) {
             <p><strong>' . $eqLogicName . '</strong> est prêt à synchroniser vos données.</p>
             <p>Les tokens d\'accès ont été chiffrés et sauvegardés de manière sécurisée.</p>
             <p><small>💡 Le token sera automatiquement renouvelé toutes les 3 heures</small></p>
+            <p><small>📊 Une première synchronisation a été effectuée automatiquement</small></p>
             <p>
                 <a href="javascript:void(0)" onclick="closeWindow()" class="btn">Fermer cette fenêtre</a>
-                <a href="/index.php?v=d&p=withings&m=withings&id=' . $eqLogicId . '" class="btn">Retourner à l\'équipement</a>
             </p>
+            <p><small>Cette fenêtre se fermera automatiquement dans <span id="countdown" class="countdown">2</span> secondes</small></p>
         </div>
         
         <script>
+        var countdownTimer = 2;
+        
         function closeWindow() {
-            // Ne pas toucher à la session parent et ne pas recharger
-            if (window.opener) {
-                // Juste fermer la popup
-                window.close();
-            } else {
-                // Si pas de popup parent, rediriger vers l\'équipement
-                window.location.href = "/index.php?v=d&p=withings&m=withings&id=' . $eqLogicId . '";
+            // Message à la fenêtre parent pour indiquer le succès de l\'autorisation
+            if (window.opener && !window.opener.closed) {
+                try {
+                    // Envoyer un message sécurisé à la fenêtre parent
+                    window.opener.postMessage({
+                        type: "withings_oauth_success",
+                        equipmentId: ' . $eqLogicId . ',
+                        equipmentName: "' . addslashes($eqLogicName) . '"
+                    }, window.location.origin);
+                } catch (e) {
+                    console.log("Impossible de communiquer avec la fenêtre parent");
+                }
+            }
+            
+            // Fermer la popup
+            window.close();
+        }
+        
+        // Compte à rebours automatique
+        function updateCountdown() {
+            var countdownElement = document.getElementById("countdown");
+            if (countdownElement) {
+                countdownElement.textContent = countdownTimer;
+                countdownTimer--;
+                
+                if (countdownTimer < 0) {
+                    closeWindow();
+                } else {
+                    setTimeout(updateCountdown, 1000);
+                }
             }
         }
         
-        // Fermeture automatique après 5 secondes
-        setTimeout(closeWindow, 5000);
+        // Démarrer le compte à rebours
+        updateCountdown();
         </script>
     </body>
     </html>';
@@ -123,8 +150,12 @@ try {
     // EXCEPTION: Le callback OAuth ne nécessite pas d'authentification Jeedom
     // Traitement isolé pour éviter les conflits de session
     if ($action == 'oauth_callback') {
-        // Ne pas démarrer de session pour éviter les conflits
+        // ISOLATION COMPLÈTE DE LA SESSION pour éviter les conflits
+        if (session_status() === PHP_SESSION_ACTIVE) {
+            session_write_close(); // Fermer la session active sans la détruire
+        }
         
+        // Ne pas démarrer de nouvelle session pour éviter les conflits
         WithingsSecurity::logAction('oauth_callback_received');
         
         // Rate limiting spécial pour OAuth (sans session)
@@ -437,7 +468,6 @@ try {
     }
 
     if ($action == 'getTokenInfo') {
-        // Permettre getTokenInfo sans authentification stricte si c'est pour la popup de callback
         $eqLogicId = init('id');
         if (!is_numeric($eqLogicId) || $eqLogicId <= 0) {
             throw new Exception('ID équipement invalide');

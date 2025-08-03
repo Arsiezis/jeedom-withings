@@ -74,7 +74,7 @@ var withingsSecurity = {
   }
 };
 
-/* Gestion des boutons spécifiques à Withings avec sécurité renforcée */
+/* Gestion améliorée de l'autorisation OAuth avec communication inter-fenêtres */
 $('#bt_authorize').on('click', function () {
   var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
   
@@ -121,6 +121,40 @@ $('#bt_authorize').on('click', function () {
         return;
       }
       
+      // Afficher un message informatif
+      $('#div_alert').showAlert({
+        message: '{{Ouverture de la popup d\'autorisation Withings...}}',
+        level: 'info'
+      });
+      
+      // Écouter les messages de la popup OAuth
+      var messageHandler = function(event) {
+        if (event.origin !== window.location.origin) {
+          return; // Ignorer les messages d'autres origines
+        }
+        
+        if (event.data && event.data.type === 'withings_oauth_success') {
+          console.log('Autorisation OAuth réussie:', event.data);
+          
+          // Nettoyer l'écouteur
+          window.removeEventListener('message', messageHandler);
+          
+          // Afficher un message de succès
+          $('#div_alert').showAlert({
+            message: '{{Autorisation Withings réussie ! Rechargement de la page...}}',
+            level: 'success'
+          });
+          
+          // Recharger la page immédiatement pour voir les nouvelles données
+          setTimeout(function() {
+            window.location.reload();
+          }, 1500);
+        }
+      };
+      
+      // Ajouter l'écouteur de messages
+      window.addEventListener('message', messageHandler);
+      
       // Ouvrir une popup pour l'autorisation avec paramètres sécurisés
       var popup = window.open(
         data.result, 
@@ -130,22 +164,39 @@ $('#bt_authorize').on('click', function () {
       
       // Vérifier si la popup a été bloquée
       if (!popup) {
+        // Nettoyer l'écouteur si la popup est bloquée
+        window.removeEventListener('message', messageHandler);
+        
         $('#div_alert').showAlert({
           message: '{{La popup d\'autorisation a été bloquée. Veuillez autoriser les popups pour ce site.}}',
           level: 'warning'
         });
       } else {
-        // Surveiller la fermeture de la popup pour actualiser les infos
+        // Surveiller la fermeture de la popup
         var checkClosed = setInterval(function() {
           if (popup.closed) {
             clearInterval(checkClosed);
-            // Attendre un peu puis actualiser les informations
+            
+            // Si la popup est fermée sans message de succès, nettoyer l'écouteur
             setTimeout(function() {
-              // Forcer une reconnexion en actualisant la page
-              window.location.reload();
-            }, 1000);
+              window.removeEventListener('message', messageHandler);
+              
+              // Vérifier si nous avons des données après autorisation
+              setTimeout(function() {
+                // Recharger la page pour voir les nouvelles données
+                window.location.reload();
+              }, 1000);
+            }, 500);
           }
         }, 1000);
+        
+        // Timeout de sécurité pour nettoyer l'écouteur après 5 minutes
+        setTimeout(function() {
+          window.removeEventListener('message', messageHandler);
+          if (checkClosed) {
+            clearInterval(checkClosed);
+          }
+        }, 300000); // 5 minutes
       }
     }
   });
@@ -194,6 +245,7 @@ $('#bt_testConnection').on('click', function () {
       $('#div_alert').showAlert({message: data.result, level: 'success'});
       updateConnectionStatus('connected');
       updateTokenInfo();
+      displayLastMeasures();
     }
   });
   
@@ -343,6 +395,7 @@ $('#bt_resetAuth').on('click', function () {
             $('#div_alert').showAlert({message: data.result, level: 'success'});
             updateConnectionStatus('disconnected');
             $('#tokenInfo').html('<div class="alert alert-warning"><i class="fas fa-exclamation-triangle"></i> {{Autorisation réinitialisée. Veuillez refaire l\'autorisation OAuth.}}</div>');
+            $('#lastMeasures').html('<div class="alert alert-info"><i class="fas fa-info-circle"></i> {{Effectuez une nouvelle autorisation puis une synchronisation pour voir vos données.}}</div>');
           }
         });
       }
@@ -388,6 +441,10 @@ $('#bt_syncData').on('click', function () {
         $('#div_alert').showAlert({message: data.result, level: 'danger'});
       } else {
         $('#div_alert').showAlert({message: data.result, level: 'success'});
+        // Actualiser les informations après synchronisation
+        updateTokenInfo();
+        displayLastMeasures();
+        // Actualiser les valeurs des commandes
         setTimeout(function() {
           window.location.reload();
         }, 1500);
@@ -404,6 +461,11 @@ $('#bt_syncData').on('click', function () {
 function updateTokenInfo() {
   var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
   if (!withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+    return;
+  }
+  
+  // Ne pas faire d'appel si on n'est pas connecté (éviter les erreurs 401)
+  if (typeof isConnect === 'function' && !isConnect('admin')) {
     return;
   }
   
@@ -465,7 +527,10 @@ function updateTokenInfo() {
       }
     },
     error: function(request, status, error) {
-      $('#tokenInfo').html('<div class="alert alert-info"><i class="fas fa-info-circle"></i> {{Informations du token non disponibles. Effectuez d\'abord l\'autorisation OAuth.}}</div>');
+      // Ne pas afficher d'erreur si c'est juste une question d'authentification
+      if (request.status !== 401) {
+        $('#tokenInfo').html('<div class="alert alert-info"><i class="fas fa-info-circle"></i> {{Informations du token non disponibles. Effectuez d\'abord l\'autorisation OAuth.}}</div>');
+      }
     }
   });
 }
@@ -514,19 +579,14 @@ function escapeHtml(text) {
   return text.replace(/[&<>"']/g, function(m) { return map[m]; });
 }
 
-/* Fonction exécutée au chargement de l'équipement */
-$('.eqLogicThumbnailDisplay').on('click', '.eqLogicDisplayCard', function () {
-  var eqLogicId = $(this).attr('data-eqLogic_id');
-  
-  if (withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
-    setTimeout(function() {
-      checkConnectionStatus(eqLogicId);
-    }, 500);
-  }
-});
-
+/* Fonction améliorée pour vérifier le statut de connexion */
 function checkConnectionStatus(eqLogicId) {
   if (!withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+    return;
+  }
+  
+  // Ne pas faire d'appel si on n'est pas connecté
+  if (typeof isConnect === 'function' && !isConnect('admin')) {
     return;
   }
   
@@ -542,16 +602,30 @@ function checkConnectionStatus(eqLogicId) {
     timeout: 15000,
     error: function (request, status, error) {
       updateConnectionStatus('disconnected');
+      updateTokenInfo();
     },
     success: function (data) {
       if (data.state == 'ok') {
         updateConnectionStatus('connected');
+        displayLastMeasures();
       } else {
         updateConnectionStatus('disconnected');
       }
+      updateTokenInfo();
     }
   });
 }
+
+/* Fonction exécutée au chargement de l'équipement */
+$('.eqLogicThumbnailDisplay').on('click', '.eqLogicDisplayCard', function () {
+  var eqLogicId = $(this).attr('data-eqLogic_id');
+  
+  if (withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+    setTimeout(function() {
+      checkConnectionStatus(eqLogicId);
+    }, 500);
+  }
+});
 
 /* Charger les informations du token au chargement de la page avec sécurité */
 $(document).ready(function() {
@@ -573,17 +647,19 @@ $(document).ready(function() {
     }, 10);
   });
   
-  // Attendre que l'ID soit disponible
+  // Attendre que l'ID soit disponible et que l'utilisateur soit connecté
   setTimeout(function() {
     var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
     if (withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
       updateTokenInfo();
+      displayLastMeasures();
       
+      // Mise à jour périodique moins fréquente pour éviter les erreurs
       var updateInterval = setInterval(function() {
         if (!withingsSecurity.requestInProgress) {
           updateTokenInfo();
         }
-      }, 300000);
+      }, 300000); // 5 minutes au lieu de 5 minutes
       
       $(window).on('beforeunload', function() {
         clearInterval(updateInterval);
@@ -607,7 +683,7 @@ $(document).ready(function() {
   });
 });
 
-/* Fonction pour afficher les dernières mesures avec sécurité */
+/* Fonction améliorée pour afficher les dernières mesures */
 function displayLastMeasures() {
   var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
   if (!withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
@@ -616,18 +692,35 @@ function displayLastMeasures() {
   
   var commands = ['weight', 'bmi', 'fat_ratio', 'muscle_mass', 'bone_mass', 'hydration', 'last_sync'];
   var html = '<div class="row">';
+  var hasData = false;
   
   commands.forEach(function(cmdLogicalId, index) {
     if (index > 0 && index % 2 === 0) {
       html += '</div><div class="row">';
     }
     
-    var cmd = $('.cmd[data-cmd_id]').find('.cmdAttr[data-l1key="logicalId"][value="' + escapeHtml(cmdLogicalId) + '"]').closest('.cmd');
-    var value = cmd.find('.cmdAttr[data-l1key="currentValue"]').text() || '--';
-    var unit = cmd.find('.cmdAttr[data-l1key="unite"]').val() || '';
+    // Chercher la commande dans le tableau des commandes
+    var cmd = $('#table_cmd tbody tr').find('.cmdAttr[data-l1key="logicalId"][value="' + escapeHtml(cmdLogicalId) + '"]').closest('tr');
+    var value = '--';
+    var unit = '';
     
-    value = escapeHtml(value);
-    unit = escapeHtml(unit);
+    if (cmd.length > 0) {
+      // Récupérer l'ID de la commande
+      var cmdId = cmd.find('.cmdAttr[data-l1key="id"]').val();
+      if (cmdId) {
+        // Essayer de récupérer la valeur depuis l'attribut data ou le cache Jeedom
+        var cachedValue = cmd.find('.cmdAttr[data-l1key="currentValue"]').text();
+        if (cachedValue && cachedValue !== '') {
+          value = cachedValue;
+          hasData = true;
+        }
+      }
+      
+      unit = cmd.find('.cmdAttr[data-l1key="unite"]').val() || '';
+    }
+    
+    value = escapeHtml(String(value));
+    unit = escapeHtml(String(unit));
     
     var displayName = {
       'weight': '{{Poids}}',
@@ -639,15 +732,40 @@ function displayLastMeasures() {
       'last_sync': '{{Dernière sync}}'
     };
     
+    var panelClass = 'panel-default';
+    var textClass = 'text-muted';
+    if (value !== '--' && value !== '') {
+      panelClass = 'panel-primary';
+      textClass = 'text-primary';
+    }
+    
     html += '<div class="col-sm-6">';
-    html += '<div class="panel panel-default">';
+    html += '<div class="panel ' + panelClass + '">';
     html += '<div class="panel-body text-center">';
     html += '<h4>' + displayName[cmdLogicalId] + '</h4>';
-    html += '<h3 class="text-primary">' + value + ' ' + unit + '</h3>';
+    
+    if (cmdLogicalId === 'last_sync' && value !== '--') {
+      html += '<small class="' + textClass + '">' + value + '</small>';
+    } else {
+      html += '<h3 class="' + textClass + '">' + value;
+      if (unit && value !== '--') {
+        html += ' <small>' + unit + '</small>';
+      }
+      html += '</h3>';
+    }
+    
     html += '</div></div></div>';
   });
   
   html += '</div>';
+  
+  if (!hasData) {
+    html = '<div class="alert alert-info">';
+    html += '<i class="fas fa-info-circle"></i> ';
+    html += '{{Aucune donnée disponible. Effectuez une synchronisation pour voir vos dernières mesures.}}';
+    html += '</div>';
+  }
+  
   $('#lastMeasures').html(html);
 }
 
