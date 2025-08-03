@@ -130,15 +130,35 @@ $eqLogics = eqLogic::byType($plugin->getId());
 								<div class="col-sm-8">
 									<span id="connectionStatus" class="label label-default">{{Non configuré}}</span>
 									<br><br>
-									<a class="btn btn-primary btn-sm" id="bt_authorize">
-										<i class="fas fa-key"></i> {{Autoriser l'accès Withings}}
+									<div class="btn-group" role="group">
+										<a class="btn btn-primary btn-sm" id="bt_authorize">
+											<i class="fas fa-key"></i> {{Autoriser l'accès Withings}}
+										</a>
+										<a class="btn btn-warning btn-sm" id="bt_testConnection">
+											<i class="fas fa-check-circle"></i> {{Tester la connexion}}
+										</a>
+										<a class="btn btn-danger btn-sm" id="bt_resetAuth">
+											<i class="fas fa-trash"></i> {{Réinitialiser}}
+										</a>
+									</div>
+								</div>
+							</div>
+
+							<div class="form-group">
+								<label class="col-sm-4 control-label">{{Gestion des tokens}}</label>
+								<div class="col-sm-8">
+									<div id="tokenInfo">
+										<div class="alert alert-info">
+											<i class="fas fa-info-circle"></i> {{Chargement des informations du token...}}
+										</div>
+									</div>
+									<a class="btn btn-info btn-sm" id="bt_refreshToken">
+										<i class="fas fa-sync-alt"></i> {{Renouveler le token}}
 									</a>
-									<a class="btn btn-warning btn-sm" id="bt_testConnection">
-										<i class="fas fa-check-circle"></i> {{Tester la connexion}}
-									</a>
-									<a class="btn btn-danger btn-sm" id="bt_resetAuth">
-										<i class="fas fa-trash"></i> {{Réinitialiser}}
-									</a>
+									<br><br>
+									<small class="text-muted">
+										<i class="fas fa-info-circle"></i> {{Les tokens Withings expirent toutes les 3 heures et sont automatiquement renouvelés.}}
+									</small>
 								</div>
 							</div>
 
@@ -159,6 +179,19 @@ $eqLogics = eqLogic::byType($plugin->getId());
 									</a>
 								</div>
 							</div>
+
+							<div class="form-group">
+								<label class="col-sm-4 control-label">{{Taille pour calcul IMC}}
+									<sup><i class="fas fa-question-circle tooltips" title="{{Votre taille en mètres pour le calcul automatique de l'IMC}}"></i></sup>
+								</label>
+								<div class="col-sm-6">
+									<div class="input-group">
+										<input type="number" step="0.01" min="1.00" max="2.50" class="eqLogicAttr form-control" data-l1key="configuration" data-l2key="height" placeholder="1.75">
+										<span class="input-group-addon">m</span>
+									</div>
+									<small class="text-muted">{{Exemple: 1.75 pour 1m75}}</small>
+								</div>
+							</div>
 						</div>
 
 						<!-- Partie droite de l'onglet "Équipement" -->
@@ -176,6 +209,28 @@ $eqLogics = eqLogic::byType($plugin->getId());
 								<div class="alert alert-info">
 									<i class="fas fa-info-circle"></i> {{Les dernières mesures s'afficheront ici après la première synchronisation}}
 								</div>
+							</div>
+
+							<legend><i class="fas fa-cogs"></i> {{Actions de diagnostic}}</legend>
+							<div class="form-group">
+								<label class="col-sm-4 control-label">{{Tests système}}</label>
+								<div class="col-sm-6">
+									<a class="btn btn-info btn-sm" id="bt_testEndpoints">
+										<i class="fas fa-network-wired"></i> {{Tester les endpoints}}
+									</a>
+									<br><br>
+									<small class="text-muted">{{Teste la connectivité vers les serveurs Withings}}</small>
+								</div>
+							</div>
+
+							<div class="alert alert-success">
+								<h4><i class="fas fa-lightbulb"></i> {{Conseils d'utilisation}}</h4>
+								<ul>
+									<li>{{Configurez votre taille pour un calcul automatique de l'IMC}}</li>
+									<li>{{La synchronisation automatique récupère vos données toutes les heures}}</li>
+									<li>{{Les tokens sont automatiquement renouvelés, pas d'intervention manuelle nécessaire}}</li>
+									<li>{{Toutes les données sont chiffrées et sécurisées}}</li>
+								</ul>
 							</div>
 						</div>
 					</fieldset>

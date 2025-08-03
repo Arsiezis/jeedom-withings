@@ -1,0 +1,54 @@
+# .htaccess pour le plugin Withings - À placer dans /var/www/html/plugins/withings/
+
+# Protection des fichiers sensibles
+<Files "*.json">
+    Order allow,deny
+    Deny from all
+</Files>
+
+<Files "*.log">
+    Order allow,deny  
+    Deny from all
+</Files>
+
+<Files "*.bak">
+    Order allow,deny
+    Deny from all
+</Files>
+
+<Files "*.backup">
+    Order allow,deny
+    Deny from all
+</Files>
+
+<Files "*.sh">
+    Order allow,deny
+    Deny from all
+</Files>
+
+# Headers de sécurité pour les fichiers PHP
+<Files "*.php">
+    Header always set X-Content-Type-Options nosniff
+    Header always set X-Frame-Options SAMEORIGIN
+    Header always set X-XSS-Protection "1; mode=block"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
+</Files>
+
+# Désactiver l'affichage des erreurs PHP
+php_flag display_errors off
+php_flag log_errors on
+
+# Protection contre l'inclusion de fichiers
+php_flag allow_url_include off
+
+# Limiter les méthodes HTTP autorisées
+<LimitExcept GET POST>
+    deny from all
+</LimitExcept>
+
+# Protection contre les attaques par force brute
+<RequireAll>
+    Require all granted
+    Require not ip 0.0.0.0/32
+</RequireAll>

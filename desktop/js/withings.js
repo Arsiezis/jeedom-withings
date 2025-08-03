@@ -61,6 +61,9 @@ $('#bt_testConnection').on('click', function () {
     return
   }
   
+  $('#bt_testConnection').addClass('disabled')
+  $('#bt_testConnection').html('<i class="fas fa-spinner fa-spin"></i> {{Test en cours...}}')
+  
   $.ajax({
     type: "POST",
     url: "plugins/withings/core/ajax/withings.ajax.php",
@@ -71,14 +74,59 @@ $('#bt_testConnection').on('click', function () {
     dataType: 'json',
     error: function (request, status, error) {
       handleAjaxError(request, status, error)
+      $('#bt_testConnection').removeClass('disabled')
+      $('#bt_testConnection').html('<i class="fas fa-check-circle"></i> {{Tester la connexion}}')
     },
     success: function (data) {
+      $('#bt_testConnection').removeClass('disabled')
+      $('#bt_testConnection').html('<i class="fas fa-check-circle"></i> {{Tester la connexion}}')
+      
       if (data.state != 'ok') {
         $('#div_alert').showAlert({message: data.result, level: 'danger'})
         return
       }
       $('#div_alert').showAlert({message: data.result, level: 'success'})
       updateConnectionStatus('connected')
+      // Actualiser les informations du token après le test
+      updateTokenInfo()
+    }
+  })
+})
+
+$('#bt_refreshToken').on('click', function () {
+  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value()
+  if (eqLogicId == '') {
+    $('#div_alert').showAlert({message: '{{Veuillez d\'abord sauvegarder l\'équipement}}', level: 'warning'})
+    return
+  }
+  
+  $('#bt_refreshToken').addClass('disabled')
+  $('#bt_refreshToken').html('<i class="fas fa-spinner fa-spin"></i> {{Renouvellement...}}')
+  
+  $.ajax({
+    type: "POST",
+    url: "plugins/withings/core/ajax/withings.ajax.php",
+    data: {
+      action: "refreshToken",
+      id: eqLogicId
+    },
+    dataType: 'json',
+    error: function (request, status, error) {
+      handleAjaxError(request, status, error)
+      $('#bt_refreshToken').removeClass('disabled')
+      $('#bt_refreshToken').html('<i class="fas fa-sync-alt"></i> {{Renouveler le token}}')
+    },
+    success: function (data) {
+      $('#bt_refreshToken').removeClass('disabled')
+      $('#bt_refreshToken').html('<i class="fas fa-sync-alt"></i> {{Renouveler le token}}')
+      
+      if (data.state != 'ok') {
+        $('#div_alert').showAlert({message: data.result, level: 'danger'})
+      } else {
+        $('#div_alert').showAlert({message: data.result, level: 'success'})
+        // Actualiser les informations du token
+        updateTokenInfo()
+      }
     }
   })
 })
@@ -131,6 +179,8 @@ $('#bt_resetAuth').on('click', function () {
           }
           $('#div_alert').showAlert({message: data.result, level: 'success'})
           updateConnectionStatus('disconnected')
+          // Vider les informations du token
+          $('#tokenInfo').html('<div class="alert alert-warning"><i class="fas fa-exclamation-triangle"></i> Autorisation réinitialisée. Veuillez refaire l\'autorisation OAuth.</div>')
         }
       })
     }
@@ -177,23 +227,95 @@ $('#bt_syncData').on('click', function () {
   })
 })
 
+/* Fonction pour afficher les informations du token */
+function updateTokenInfo() {
+  var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value()
+  if (eqLogicId == '') return
+  
+  $.ajax({
+    type: "POST",
+    url: "plugins/withings/core/ajax/withings.ajax.php",
+    data: {
+      action: "getTokenInfo",
+      id: eqLogicId
+    },
+    dataType: 'json',
+    success: function (data) {
+      if (data.state == 'ok') {
+        var info = data.result
+        var statusClass = 'success'
+        var statusIcon = '✅'
+        
+        if (info.is_expired) {
+          statusClass = 'danger'
+          statusIcon = '❌'
+        } else if (info.needs_renewal_soon) {
+          statusClass = 'warning'
+          statusIcon = '⚠️'
+        }
+        
+        var html = '<div class="alert alert-' + statusClass + '">'
+        html += '<h4><i class="fas fa-key"></i> Informations du token d\'accès</h4>'
+        html += '<p><strong>État:</strong> ' + statusIcon + ' ' + info.status.toUpperCase() + '</p>'
+        html += '<p><strong>Expire dans:</strong> ' + info.expires_in_hours + ' heures</p>'
+        html += '<p><strong>Date d\'expiration:</strong> ' + info.expires_at + '</p>'
+        
+        if (info.renewed_at !== 'Jamais') {
+          html += '<p><strong>Dernier renouvellement:</strong> ' + info.renewed_at + '</p>'
+        }
+        
+        if (info.created_at !== 'Inconnu') {
+          html += '<p><strong>Créé le:</strong> ' + info.created_at + '</p>'
+        }
+        
+        if (info.needs_renewal_soon && !info.is_expired) {
+          html += '<hr><p class="text-warning"><i class="fas fa-clock"></i> <strong>Le token expire bientôt.</strong><br>'
+          html += 'Il sera automatiquement renouvelé lors de la prochaine synchronisation ou test de connexion.</p>'
+        }
+        
+        if (info.is_expired) {
+          html += '<hr><p class="text-danger"><i class="fas fa-exclamation-triangle"></i> <strong>Token expiré!</strong><br>'
+          html += 'Cliquez sur "Renouveler le token" ou refaites l\'autorisation OAuth si le renouvellement échoue.</p>'
+        }
+        
+        // Ajouter informations techniques
+        html += '<hr><small class="text-muted">'
+        html += '<i class="fas fa-info-circle"></i> Les tokens Withings expirent toutes les 3 heures et sont automatiquement renouvelés.'
+        html += '</small>'
+        
+        html += '</div>'
+        
+        $('#tokenInfo').html(html)
+      }
+    },
+    error: function() {
+      $('#tokenInfo').html('<div class="alert alert-info"><i class="fas fa-info-circle"></i> Informations du token non disponibles. Effectuez d\'abord l\'autorisation OAuth.</div>')
+    }
+  })
+}
+
 /* Fonction pour mettre à jour le statut de connexion */
 function updateConnectionStatus(status) {
   var statusElement = $('#connectionStatus')
   
   switch (status) {
     case 'connected':
-      statusElement.removeClass('label-default label-danger')
+      statusElement.removeClass('label-default label-danger label-warning')
       statusElement.addClass('label-success')
       statusElement.text('{{Connecté}}')
       break
     case 'disconnected':
-      statusElement.removeClass('label-default label-success')
+      statusElement.removeClass('label-default label-success label-warning')
       statusElement.addClass('label-danger')
       statusElement.text('{{Déconnecté}}')
       break
+    case 'warning':
+      statusElement.removeClass('label-default label-success label-danger')
+      statusElement.addClass('label-warning')
+      statusElement.text('{{Token expire bientôt}}')
+      break
     default:
-      statusElement.removeClass('label-success label-danger')
+      statusElement.removeClass('label-success label-danger label-warning')
       statusElement.addClass('label-default')
       statusElement.text('{{Non configuré}}')
   }
@@ -230,6 +352,22 @@ function checkConnectionStatus(eqLogicId) {
     }
   })
 }
+
+/* Charger les informations du token au chargement de la page */
+$(document).ready(function() {
+  // Attendre que l'ID soit disponible
+  setTimeout(function() {
+    var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value()
+    if (eqLogicId && eqLogicId !== '') {
+      updateTokenInfo()
+      
+      // Actualiser les infos toutes les 5 minutes
+      setInterval(function() {
+        updateTokenInfo()
+      }, 300000)
+    }
+  }, 1000)
+})
 
 /* Fonction pour afficher les dernières mesures */
 function displayLastMeasures() {
