@@ -74,7 +74,7 @@ var withingsSecurity = {
   }
 };
 
-/* Gestion améliorée de l'autorisation OAuth avec communication inter-fenêtres */
+/* Gestion améliorée de l'autorisation OAuth avec préservation de session */
 $('#bt_authorize').on('click', function () {
   var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
   
@@ -91,6 +91,13 @@ $('#bt_authorize').on('click', function () {
   withingsSecurity.requestInProgress = true;
   $(this).prop('disabled', true);
   
+  // Sauvegarder l'état de la session actuelle
+  var currentSessionData = {
+    timestamp: Date.now(),
+    equipmentId: eqLogicId
+  };
+  sessionStorage.setItem('withings_oauth_state', JSON.stringify(currentSessionData));
+  
   $.ajax({
     type: "POST",
     url: "plugins/withings/core/ajax/withings.ajax.php",
@@ -105,6 +112,7 @@ $('#bt_authorize').on('click', function () {
       withingsSecurity.handleError('getAuthUrl', request, {eqLogicId: eqLogicId});
       withingsSecurity.requestInProgress = false;
       $('#bt_authorize').prop('disabled', false);
+      sessionStorage.removeItem('withings_oauth_state');
     },
     success: function (data) {
       withingsSecurity.requestInProgress = false;
@@ -112,12 +120,14 @@ $('#bt_authorize').on('click', function () {
       
       if (data.state != 'ok') {
         $('#div_alert').showAlert({message: data.result, level: 'danger'});
+        sessionStorage.removeItem('withings_oauth_state');
         return;
       }
       
       // Validation de l'URL côté client
       if (!data.result || !data.result.startsWith('https://')) {
         $('#div_alert').showAlert({message: '{{URL d\'autorisation invalide}}', level: 'danger'});
+        sessionStorage.removeItem('withings_oauth_state');
         return;
       }
       
@@ -139,13 +149,16 @@ $('#bt_authorize').on('click', function () {
           // Nettoyer l'écouteur
           window.removeEventListener('message', messageHandler);
           
+          // Nettoyer le stockage de session
+          sessionStorage.removeItem('withings_oauth_state');
+          
           // Afficher un message de succès
           $('#div_alert').showAlert({
             message: '{{Autorisation Withings réussie ! Rechargement de la page...}}',
             level: 'success'
           });
           
-          // Recharger la page immédiatement pour voir les nouvelles données
+          // Recharger la page pour voir les nouvelles données
           setTimeout(function() {
             window.location.reload();
           }, 1500);
@@ -166,6 +179,7 @@ $('#bt_authorize').on('click', function () {
       if (!popup) {
         // Nettoyer l'écouteur si la popup est bloquée
         window.removeEventListener('message', messageHandler);
+        sessionStorage.removeItem('withings_oauth_state');
         
         $('#div_alert').showAlert({
           message: '{{La popup d\'autorisation a été bloquée. Veuillez autoriser les popups pour ce site.}}',
@@ -177,15 +191,13 @@ $('#bt_authorize').on('click', function () {
           if (popup.closed) {
             clearInterval(checkClosed);
             
-            // Si la popup est fermée sans message de succès, nettoyer l'écouteur
+            // Si la popup est fermée sans message de succès, nettoyer
             setTimeout(function() {
               window.removeEventListener('message', messageHandler);
+              sessionStorage.removeItem('withings_oauth_state');
               
-              // Vérifier si nous avons des données après autorisation
-              setTimeout(function() {
-                // Recharger la page pour voir les nouvelles données
-                window.location.reload();
-              }, 1000);
+              // Vérifier si l'autorisation a réussi en vérifiant l'état de l'équipement
+              checkAuthorizationStatus(eqLogicId);
             }, 500);
           }
         }, 1000);
@@ -193,6 +205,7 @@ $('#bt_authorize').on('click', function () {
         // Timeout de sécurité pour nettoyer l'écouteur après 5 minutes
         setTimeout(function() {
           window.removeEventListener('message', messageHandler);
+          sessionStorage.removeItem('withings_oauth_state');
           if (checkClosed) {
             clearInterval(checkClosed);
           }
@@ -201,6 +214,51 @@ $('#bt_authorize').on('click', function () {
     }
   });
 });
+
+/* Fonction pour vérifier le statut de l'autorisation après fermeture de popup */
+function checkAuthorizationStatus(eqLogicId) {
+  if (!withingsSecurity.validateInput(eqLogicId, 'equipment_id')) {
+    return;
+  }
+  
+  // Attendre un peu pour laisser le temps au serveur de traiter
+  setTimeout(function() {
+    $.ajax({
+      type: "POST",
+      url: "plugins/withings/core/ajax/withings.ajax.php",
+      data: {
+        action: "getTokenInfo",
+        id: eqLogicId,
+        csrf_token: withingsSecurity.getCSRFToken()
+      },
+      dataType: 'json',
+      timeout: 10000,
+      success: function (data) {
+        if (data.state == 'ok' && data.result && !data.result.is_expired) {
+          // Token valide trouvé, l'autorisation a réussi
+          $('#div_alert').showAlert({
+            message: '{{Autorisation détectée ! Rechargement de la page...}}',
+            level: 'success'
+          });
+          
+          setTimeout(function() {
+            window.location.reload();
+          }, 1500);
+        } else {
+          // Pas de token valide, afficher un message neutre
+          $('#div_alert').showAlert({
+            message: '{{Fenêtre d\'autorisation fermée. Si vous avez autorisé l\'accès, la connexion sera effective dans quelques instants.}}',
+            level: 'info'
+          });
+        }
+      },
+      error: function() {
+        // En cas d'erreur, ne rien faire de spécial
+        console.log('Impossible de vérifier le statut d\'autorisation');
+      }
+    });
+  }, 2000);
+}
 
 $('#bt_testConnection').on('click', function () {
   var eqLogicId = $('.eqLogicAttr[data-l1key=id]').value();
@@ -629,6 +687,37 @@ $('.eqLogicThumbnailDisplay').on('click', '.eqLogicDisplayCard', function () {
 
 /* Charger les informations du token au chargement de la page avec sécurité */
 $(document).ready(function() {
+  // Vérifier si on revient d'une autorisation OAuth
+  var oauthState = sessionStorage.getItem('withings_oauth_state');
+  if (oauthState) {
+    try {
+      var stateData = JSON.parse(oauthState);
+      var elapsed = Date.now() - stateData.timestamp;
+      
+      // Si moins de 10 minutes se sont écoulées, on considère qu'on revient d'OAuth
+      if (elapsed < 600000) {
+        // Nettoyer le stockage
+        sessionStorage.removeItem('withings_oauth_state');
+        
+        // Afficher un message et vérifier le statut
+        $('#div_alert').showAlert({
+          message: '{{Vérification du statut de l\'autorisation...}}',
+          level: 'info'
+        });
+        
+        // Vérifier si l'autorisation a réussi
+        if (stateData.equipmentId) {
+          checkAuthorizationStatus(stateData.equipmentId);
+        }
+      } else {
+        // Trop vieux, nettoyer
+        sessionStorage.removeItem('withings_oauth_state');
+      }
+    } catch (e) {
+      sessionStorage.removeItem('withings_oauth_state');
+    }
+  }
+  
   // Protection contre les attaques XSS
   $('input, textarea').on('paste', function(e) {
     setTimeout(function() {
@@ -659,7 +748,7 @@ $(document).ready(function() {
         if (!withingsSecurity.requestInProgress) {
           updateTokenInfo();
         }
-      }, 300000); // 5 minutes au lieu de 5 minutes
+      }, 300000); // 5 minutes
       
       $(window).on('beforeunload', function() {
         clearInterval(updateInterval);
@@ -1003,4 +1092,4 @@ style.textContent = `
 `;
 document.head.appendChild(style);
 
-console.log('[Withings] Plugin JavaScript chargé avec sécurité renforcée');
+console.log('[Withings] Plugin JavaScript chargé avec sécurité renforcée et gestion de session OAuth');

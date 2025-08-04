@@ -121,44 +121,26 @@ function generateSuccessPageSafe($eqLogic) {
 
 try {
     require_once dirname(__FILE__) . '/../../../../core/php/core.inc.php';
-    include_file('core', 'authentification', 'php');
-    require_once dirname(__FILE__) . '/../class/WithingsSecurity.class.php';
-
-    // Protection contre les attaques par déni de service
-    $clientIp = WithingsSecurity::getClientIP();
     
+    // NE PAS inclure authentification.php pour oauth_callback
     $action = init('action');
-    WithingsSecurity::logAction('ajax_call', [
-        'action' => $action,
-        'client_ip' => $clientIp
-    ]);
     
-    // Liste blanche des actions autorisées
-    $allowedActions = [
-        'oauth_callback', 'getAuthUrl', 'syncData', 'testConnection', 
-        'testEndpoints', 'refreshCommands', 'resetAuth', 'refreshToken', 'getTokenInfo'
-    ];
-    
-    if (!in_array($action, $allowedActions)) {
-        WithingsSecurity::logAction('unauthorized_action_attempt', [
-            'action' => $action,
-            'client_ip' => $clientIp
-        ], 'error');
-        throw new Exception('Action non autorisée');
-    }
-    
-    // EXCEPTION: Le callback OAuth ne nécessite pas d'authentification Jeedom
-    // Traitement isolé pour éviter les conflits de session
+    // TRAITEMENT SPÉCIAL pour oauth_callback SANS session
     if ($action == 'oauth_callback') {
-        // ISOLATION COMPLÈTE DE LA SESSION pour éviter les conflits
-        if (session_status() === PHP_SESSION_ACTIVE) {
-            session_write_close(); // Fermer la session active sans la détruire
+        // Sauvegarder l'ID de session Jeedom si elle existe
+        $jeedomSessionId = null;
+        if (isset($_COOKIE['sess_id'])) {
+            $jeedomSessionId = $_COOKIE['sess_id'];
         }
         
-        // Ne pas démarrer de nouvelle session pour éviter les conflits
+        // NE PAS démarrer de session ici pour éviter les conflits
+        require_once dirname(__FILE__) . '/../class/WithingsSecurity.class.php';
+        
         WithingsSecurity::logAction('oauth_callback_received');
         
-        // Rate limiting spécial pour OAuth (sans session)
+        $clientIp = WithingsSecurity::getClientIP();
+        
+        // Rate limiting
         try {
             WithingsSecurity::checkRateLimit($clientIp, 'oauth');
         } catch (Exception $e) {
@@ -188,7 +170,7 @@ try {
             exit;
         }
         
-        // Validation basique du code d'autorisation
+        // Validation du code et state
         if (empty($code) || !preg_match('/^[a-zA-Z0-9_-]+$/', $code)) {
             WithingsSecurity::logAction('oauth_invalid_code', [
                 'client_ip' => $clientIp
@@ -197,7 +179,6 @@ try {
             exit;
         }
         
-        // Validation basique du state
         if (empty($state) || !preg_match('/^[a-f0-9_]+$/', $state)) {
             WithingsSecurity::logAction('oauth_invalid_state_format', [
                 'client_ip' => $clientIp
@@ -206,18 +187,18 @@ try {
             exit;
         }
         
-        // Trouver l'équipement correspondant au state (validation simple)
+        // Trouver l'équipement SANS utiliser de session
+        require_once dirname(__FILE__) . '/../class/withings.class.php';
         $eqLogics = eqLogic::byType('withings');
         $targetEqLogic = null;
         
         foreach ($eqLogics as $eqLogic) {
             $expectedState = $eqLogic->getConfiguration('oauth_state');
             if (!empty($expectedState) && $expectedState === $state) {
-                // Vérifier que le state n'est pas trop ancien (1 heure max)
                 $parts = explode('_', $state);
                 if (count($parts) >= 2) {
                     $timestamp = (int)$parts[1];
-                    if (time() - $timestamp <= 3600) { // 1 heure max
+                    if (time() - $timestamp <= 3600) {
                         $targetEqLogic = $eqLogic;
                         WithingsSecurity::logAction('oauth_equipment_found', [
                             'equipment_id' => $eqLogic->getId(),
@@ -238,10 +219,14 @@ try {
         }
         
         try {
-            // Effectuer l'échange de token de manière isolée
+            // Effectuer l'échange de token
             $success = $targetEqLogic->exchangeCodeForToken($code, $state);
             
             if ($success) {
+                // Restaurer le cookie de session Jeedom si nécessaire
+                if ($jeedomSessionId) {
+                    setcookie('sess_id', $jeedomSessionId, 0, '/', '', true, true);
+                }
                 echo generateSuccessPageSafe($targetEqLogic);
             } else {
                 throw new Exception('Échec de l\'échange du code contre le token');
@@ -252,7 +237,6 @@ try {
                 'error' => $e->getMessage()
             ], 'error');
             
-            // Messages d'erreur spécifiques pour aider l'utilisateur
             $userMessage = $e->getMessage();
             if (strpos($e->getMessage(), 'Client secret') !== false) {
                 $userMessage = 'Erreur de configuration : Le Client Secret doit être reconfiguré dans les paramètres du plugin.';
@@ -263,10 +247,35 @@ try {
             echo generateErrorPage('Erreur d\'autorisation', $userMessage);
         }
         
-        exit; // Terminer proprement sans affecter la session principale
+        exit;
     }
     
-    // POUR TOUTES LES AUTRES ACTIONS: Vérification d'authentification requise
+    // POUR TOUTES LES AUTRES ACTIONS : Authentification requise
+    include_file('core', 'authentification', 'php');
+    require_once dirname(__FILE__) . '/../class/WithingsSecurity.class.php';
+    
+    $clientIp = WithingsSecurity::getClientIP();
+    
+    WithingsSecurity::logAction('ajax_call', [
+        'action' => $action,
+        'client_ip' => $clientIp
+    ]);
+    
+    // Liste blanche des actions autorisées
+    $allowedActions = [
+        'getAuthUrl', 'syncData', 'testConnection', 
+        'testEndpoints', 'refreshCommands', 'resetAuth', 'refreshToken', 'getTokenInfo'
+    ];
+    
+    if (!in_array($action, $allowedActions)) {
+        WithingsSecurity::logAction('unauthorized_action_attempt', [
+            'action' => $action,
+            'client_ip' => $clientIp
+        ], 'error');
+        throw new Exception('Action non autorisée');
+    }
+    
+    // Vérification d'authentification
     if (!isConnect('admin')) {
         WithingsSecurity::logAction('unauthorized_access_attempt', [
             'action' => $action,

@@ -75,10 +75,85 @@ Une fois l'équipement créé et sauvegardé :
 5. La fenêtre se ferme automatiquement après autorisation
 6. Testez la connexion avec le bouton **Tester la connexion**
 
+### Description détaillée des boutons
+
+#### 🔑 **Autoriser l'accès Withings**
+- **Fonction** : Initie le processus d'authentification OAuth avec Withings
+- **Quand l'utiliser** : 
+  - Première configuration d'un équipement
+  - Après une réinitialisation
+  - Si les tokens sont corrompus ou perdus
+- **Ce qu'il fait** :
+  - Ouvre une popup vers le site Withings
+  - Permet de se connecter avec vos identifiants Withings
+  - Obtient les tokens OAuth (access_token + refresh_token)
+  - Sauvegarde les tokens chiffrés dans la configuration
+
+#### 🔍 **Tester la connexion**
+- **Fonction** : Vérifie que la connexion avec l'API Withings est fonctionnelle
+- **Quand l'utiliser** :
+  - Pour diagnostiquer des problèmes de connexion
+  - Pour vérifier l'état du token
+  - Après une autorisation pour confirmer que tout fonctionne
+- **Ce qu'il fait** :
+  - Vérifie la validité du token d'accès
+  - Fait un appel test à l'API Withings
+  - Renouvelle automatiquement le token s'il expire dans moins de 30 minutes
+  - Affiche l'état du token (valide, expire bientôt, expiré)
+
+#### 🗑️ **Réinitialiser**
+- **Fonction** : Efface complètement l'autorisation OAuth
+- **Quand l'utiliser** :
+  - En cas de problème majeur d'authentification
+  - Si vous voulez changer de compte Withings
+  - Avant de désinstaller le plugin
+- **Ce qu'il fait** :
+  - Supprime tous les tokens stockés
+  - Efface les dates de création/renouvellement
+  - Remet l'équipement dans l'état "non autorisé"
+  - Nécessite de refaire "Autoriser l'accès Withings"
+
+#### 🔄 **Renouveler le token**
+- **Fonction** : Force le renouvellement du token d'accès
+- **Quand l'utiliser** :
+  - Si vous recevez des erreurs "token expiré"
+  - Pour forcer un renouvellement manuel
+  - En cas de problème avec le renouvellement automatique
+- **Ce qu'il fait** :
+  - Utilise le refresh_token pour obtenir un nouveau access_token
+  - Met à jour la date d'expiration
+  - Les tokens Withings expirent toutes les 3 heures
+- **Note** : Le renouvellement est normalement automatique
+
+#### 📊 **Synchroniser maintenant**
+- **Fonction** : Récupère les dernières données depuis Withings
+- **Quand l'utiliser** :
+  - Après vous être pesé
+  - Pour forcer une mise à jour des données
+  - Pour tester que la récupération fonctionne
+- **Ce qu'il fait** :
+  - Récupère les mesures des 30 derniers jours
+  - Met à jour toutes les commandes (poids, IMC, etc.)
+  - Actualise la date de dernière synchronisation
+  - Historise les nouvelles valeurs
+
+#### 🌐 **Tester les endpoints**
+- **Fonction** : Vérifie la connectivité réseau vers les serveurs Withings
+- **Quand l'utiliser** :
+  - Si vous avez des problèmes de connexion persistants
+  - Pour diagnostiquer des problèmes réseau/firewall
+  - Pour vérifier que les URLs de l'API sont accessibles
+- **Ce qu'il fait** :
+  - Teste la connectivité vers l'API Withings
+  - Teste la connectivité vers le serveur OAuth
+  - Ne nécessite pas de token d'authentification
+  - Affiche les URLs testées et leur statut
+
 ### Synchronisation des données
 
 - **Synchronisation automatique** : Si activée, les données sont récupérées automatiquement toutes les heures
 - **Synchronisation manuelle** : Cliquez sur **Synchroniser maintenant** pour forcer une synchronisation
+- **Période de récupération** : Par défaut, le plugin récupère les données des 30 derniers jours
 
 ## Utilisation
 
@@ -128,19 +203,38 @@ Les données sont automatiquement historisées et peuvent être affichées :
 
 **"401 - Accès non autorisé"**
 - Vérifiez que le Client ID et Client Secret sont corrects
-- Refaites l'autorisation Withings
+- Refaites l'autorisation Withings avec le bouton "Autoriser l'accès"
 
 **"Aucune donnée récupérée"**
-- Vérifiez que votre balance a bien synchronisé récemment
+- Vérifiez que votre balance a bien synchronisé récemment avec l'app Withings
 - Lancez une synchronisation manuellement
+- Vérifiez la période de récupération dans la configuration
 
 **"Token expiré"**
 - Le plugin renouvelle automatiquement les tokens
-- Si le problème persiste, réinitialisez l'autorisation
+- Si le problème persiste, utilisez "Renouveler le token"
+- En dernier recours, utilisez "Réinitialiser" puis refaites l'autorisation
+
+**"Erreur de déchiffrement"**
+- Les tokens ont été chiffrés avec une ancienne clé
+- Utilisez "Réinitialiser" puis "Autoriser l'accès" pour recréer les tokens
+
+### Ordre de diagnostic recommandé
+
+1. **Tester les endpoints** : Vérifier la connectivité réseau
+2. **Tester la connexion** : Vérifier l'authentification
+3. **Renouveler le token** : Si le token semble expiré
+4. **Réinitialiser + Autoriser** : Si rien ne fonctionne
 
 ### Logs
 
 Les logs du plugin sont disponibles dans **Analyse > Logs** > `withings`
+
+Niveaux de log :
+- **Info** : Opérations normales (synchronisation, connexion)
+- **Warning** : Avertissements (token expire bientôt)
+- **Error** : Erreurs (échec de connexion, token invalide)
+- **Debug** : Informations détaillées (activé dans la configuration)
 
 ### Support
 
@@ -148,6 +242,16 @@ Pour obtenir de l'aide :
 - Consultez le forum Jeedom
 - Ouvrez un ticket sur GitHub
 - Vérifiez la documentation Withings Developer
+
+## Sécurité
+
+Le plugin implémente plusieurs mesures de sécurité :
+
+- **Chiffrement** : Tous les tokens sont chiffrés avec AES-256-GCM
+- **Protection CSRF** : Protection contre les attaques de falsification de requête
+- **Rate limiting** : Limitation du nombre de requêtes pour éviter les abus
+- **Validation** : Toutes les entrées utilisateur sont validées
+- **Logs sécurisés** : Les données sensibles sont anonymisées dans les logs
 
 ## Changelog
 
